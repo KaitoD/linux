@@ -65,7 +65,35 @@ impl RkvmState {
     }
 }
 
-struct KVM;
+struct KVM {
+    mm: Option<Arc<MemoryMap>>, // TODO: Allocate userspace tied to this VM
+    kvm_memslots: Option<Arc<Memslots>>, // TODO: implement Memory Slot
+    kvm_vcpus: Vec<Mutex<Vcpus>>, // TODO: implement Vcpu
+    online_vcpus: Option<Mutex<u32>>,
+    last_boosted_vcpus: Option<u32>,
+    user_counts: Option<u32>
+    vm_list: Vec<Mutex<RkvmState>>,
+    kvm_vm_stat: Option<Mutex<VmxState>>,
+};
+
+impl KVM {
+    fn new() -> Self {
+        mm: None,
+        kvm_memslots: None,
+        kvm_vcpus: Vec::new(),
+        online_vcpus: None,
+        last_boosted_vcpus: None,
+        user_counts: None,
+        vm_list: Vec::new(),
+        kvm_vm_stat: None,
+
+    }
+    fn create_vm(vm_type: u32) -> Self {
+        // TODO: alloc a new GuestPhysMemorySet
+    }
+
+}
+
 impl FileOperations for KVM {
     type Wrapper = Ref<RkvmState>;
     type OpenData = Ref<RkvmState>;

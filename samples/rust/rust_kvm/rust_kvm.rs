@@ -13,6 +13,9 @@ use kernel::{
 
 mod vmcs;
 use crate::vmcs::*;
+
+mod vcpu;
+use crate::vcpu::*;
 module! {
     type: RustMiscdev,
     name: b"rust_kvm",
@@ -86,11 +89,19 @@ impl KVM {
         user_counts: None,
         vm_list: Vec::new(),
         kvm_vm_stat: None,
-
     }
-    fn create_vm(vm_type: u32) -> Self {
+    fn create_vm(vm_type: u32, ram_size : u32) -> Self {
         // TODO: alloc a new GuestPhysMemorySet
+        // if map fail, return -1
+        // set memslot 0, gpm addr 0, userspace for ram
     }
+
+    fn create_vcpu(vcpu_id : u32) -> Self {
+        // TODO: new a vcpu
+        // vcpu mmap
+    }
+
+    // TODO: load bin
 
 }
 

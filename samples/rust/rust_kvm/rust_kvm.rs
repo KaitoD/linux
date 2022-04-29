@@ -9,7 +9,9 @@ use kernel::{
     file_operations::{FileOperations, IoctlCommand, IoctlHandler},
     miscdev,
     sync::{CondVar, Mutex, Ref, RefBorrow, UniqueRef},
+    task::mm_struct,
 };
+use memory::*;
 
 mod vmcs;
 use crate::vmcs::*;
@@ -69,31 +71,39 @@ impl RkvmState {
 }
 
 struct KVM {
-    mm: Option<Arc<MemoryMap>>, // TODO: Allocate userspace tied to this VM
-    kvm_memslots: Option<Arc<Memslots>>, // TODO: implement Memory Slot
-    kvm_vcpus: Vec<Mutex<Vcpus>>, // TODO: implement Vcpu
-    online_vcpus: Option<Mutex<u32>>,
-    last_boosted_vcpus: Option<u32>,
+    mm: Option<Arc<mm_struct>>,
+    memslots: Vec<Option<DefaultGuestPhysMemorySet>>,
+    vcpus: Vec<Mutex<Vcpu>>,
     user_counts: Option<u32>
-    vm_list: Vec<Mutex<RkvmState>>,
-    kvm_vm_stat: Option<Mutex<VmxState>>,
+    state: Option<Mutex<VmxState>>,
 };
 
 impl KVM {
     fn new() -> Self {
         mm: None,
-        kvm_memslots: None,
-        kvm_vcpus: Vec::new(),
-        online_vcpus: None,
-        last_boosted_vcpus: None,
+        memslots: None,
+        vcpus: Vec::new(),
         user_counts: None,
-        vm_list: Vec::new(),
-        kvm_vm_stat: None,
+        state: None, 
     }
-    fn create_vm(vm_type: u32, ram_size : u32) -> Self {
-        // TODO: alloc a new GuestPhysMemorySet
-        // if map fail, return -1
-        // set memslot 0, gpm addr 0, userspace for ram
+    fn create_vm(&mut self,kvm_type : u64 , mem_size : u8) -> Self {
+        // init user_count
+        self.users_count = match self.user_count {
+            Some(i) => Some(i+1),
+            None => Some(1),
+        };
+
+        // init state
+        self.state = Some(Mutex::new(VmxState::new()));
+
+        // init mm
+        self.mm = current.mm;   //存疑，封装current
+
+        // init memslots
+        for i in 0..mem_size{
+            self.memslots.push(None);
+        }
+        self
     }
 
     fn create_vcpu(vcpu_id : u32) -> Self {

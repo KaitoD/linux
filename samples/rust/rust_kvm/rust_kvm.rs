@@ -70,6 +70,26 @@ impl RkvmState {
     }
 }
 
+struct kvm_vm_state{
+    state : bool ,
+    mmu_pte_write :Option<u32> ,
+    mmu_pte_updated : Option<u32> ,
+}
+
+impl kvm_vm_state {
+    fn new() -> kvm_vm_state {
+        kvm_vm_state{
+            state : false,
+            mmu_pte_write : None,
+            mmu_pte_updated : None,
+        }
+    }
+    fn kvm_change_state(&mut self , new_stat : bool ) -> bool{
+        self.state = new_state;
+        true
+    }
+}
+
 struct KVM {
     mm: Option<Arc<mm_struct>>,
     memslots: Vec<Option<DefaultGuestPhysMemorySet>>,
@@ -88,13 +108,13 @@ impl KVM {
     }
     fn create_vm(&mut self,kvm_type : u64 , mem_size : u8) -> Self {
         // init user_count
-        self.users_count = match self.user_count {
+        self.user_count = match self.user_count {
             Some(i) => Some(i+1),
             None => Some(1),
         };
 
         // init state
-        self.state = Some(Mutex::new(VmxState::new()));
+        self.state = true;
 
         // init mm
         self.mm = current.mm;   //存疑，封装current
@@ -103,12 +123,12 @@ impl KVM {
         for i in 0..mem_size{
             self.memslots.push(None);
         }
+        // TODO: arch func
         self
     }
 
     fn create_vcpu(vcpu_id : u32) -> Self {
-        // TODO: new a vcpu
-        // vcpu mmap
+        
     }
 
     // TODO: load bin

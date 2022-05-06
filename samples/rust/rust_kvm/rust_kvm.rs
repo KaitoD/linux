@@ -128,6 +128,8 @@ impl KVM {
     }
 
     fn create_vcpu(vcpu_id : u32) -> Self {
+        let mut new_vcpu = Vcpu::new();
+        new_vcpu.set_id(vcpu_id);
         
     }
 

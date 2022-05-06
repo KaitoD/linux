@@ -14,6 +14,16 @@ pub enum KvmError {
     NotFound,
 }
 
+pub struct KvmMemorySlot {
+    struct hlist_node id_node[2];
+	struct interval_tree_node hva_node[2];
+	struct kvm_arch_memory_slot arch;
+	userspace_addr : u32;
+	flags : u32;
+	id : u16;
+	as_id : u16;
+}
+
 pub trait IntoKvmPageTableFlags {
     fn is_read(&self) -> bool;
     fn is_write(&self) -> bool;
@@ -57,7 +67,6 @@ pub trait GuestPhysMemorySetTrait {
 
 #[derive(Debug, Clone, Copy)]
 pub struct GuestMemoryAttr {
-    // TODO: cache policy
     read: bool,
     write: bool,
     execute: bool,

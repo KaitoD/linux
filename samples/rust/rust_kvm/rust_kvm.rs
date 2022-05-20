@@ -1,3 +1,5 @@
+302 lines (265 sloc)  8.52 KB
+   
 // SPDX-License-Identifier: GPL-2.0
 
 //! Rust KVM for VMX
@@ -7,19 +9,26 @@ use kernel::prelude::*;
 use kernel::{
     file::File,
     file_operations::{FileOperations, IoctlCommand, IoctlHandler},
-    miscdev,
+    miscdev, pages::Pages, bit, bindings,
     sync::{CondVar, Mutex, Ref, RefBorrow, UniqueRef},
-    task::mm_struct,
+    user_ptr::UserSlicePtrReader,
+    Result,
+    mm::virt::Area,
+    io_buffer::IoBufferReader,
+    c_types::c_void,
 };
-use memory::*;
+
+mod exit;
 mod guest;
+mod mmu;
+mod vcpu;
 mod vmcs;
 mod x86reg;
-mod vcpu;
+mod vmstat;
 use crate::x86reg::Cr4;
 use crate::guest::Guest;
+use crate::vcpu::Vcpu;
 use crate::vmcs::*;
-use crate::vcpu::*;
 module! {
     type: RustMiscdev,
     name: b"rust_kvm",
@@ -72,82 +81,24 @@ impl RkvmState {
     }
 }
 
-struct kvm_vm_state{
-    state : bool ,
-    mmu_pte_write :Option<u32> ,
-    mmu_pte_updated : Option<u32> ,
-}
-
-impl kvm_vm_state {
-    fn new() -> kvm_vm_state {
-        kvm_vm_state{
-            state : false,
-            mmu_pte_write : None,
-            mmu_pte_updated : None,
-        }
-    }
-    fn kvm_change_state(&mut self , new_stat : bool ) -> bool{
-        self.state = new_state;
-        true
-    }
-}
-
-struct KVM {
-    mm: Option<Arc<mm_struct>>,
-    memslots: Vec<Option<DefaultGuestPhysMemorySet>>,
-    vcpus: Vec<Mutex<Vcpu>>,
-    user_counts: Option<u32>
-    state: Option<Mutex<VmxState>>,
-};
-
-impl KVM {
-    fn new() -> Self {
-        mm: None,
-        memslots: None,
-        vcpus: Vec::new(),
-        user_counts: None,
-        state: None, 
-    }
-    fn create_vm(&mut self,kvm_type : u64 , mem_size : u8) -> Self {
-        // init user_count
-        self.user_count = match self.user_count {
-            Some(i) => Some(i+1),
-            None => Some(1),
-        };
-
-        // init state
-        self.state = true;
-
-        // init mm
-        self.mm = current.mm;   //存疑，封装current
-
-        // init memslots
-        for i in 0..mem_size{
-            self.memslots.push(None);
-        }
-        // TODO: arch func
-        self
-    }
-
-    fn create_vcpu(vcpu_id : u32) -> Self {
-        let mut new_vcpu = Vcpu::new();
-        new_vcpu.set_id(vcpu_id);
-        
-    }
-
-    // TODO: load bin
-
-}
-
+struct KVM;
 impl FileOperations for KVM {
     type Wrapper = Ref<RkvmState>;
     type OpenData = Ref<RkvmState>;
 
-    kernel::declare_file_operations!(ioctl);
+    kernel::declare_file_operations!(ioctl, mmap);
 
     fn open(shared: &Ref<RkvmState>, _file: &File) -> Result<Self::Wrapper> {
         pr_info!("KVM open \n");
         Ok(shared.clone())
+    }
+
+    fn mmap(_shared: RefBorrow<'_, RkvmState>, _file: &File, _vma: &mut Area) -> Result {
+        pr_info!("KVM mmap \n");
+        unsafe {
+            bindings::rkvm_mmap(_file.ptr, _vma.vma);
+        }
+        Ok(())
     }
 
     fn ioctl(shared: RefBorrow<'_, RkvmState>, file: &File, cmd: &mut IoctlCommand) -> Result<i32> {
@@ -167,7 +118,7 @@ impl KernelModule for RustMiscdev {
         /* vmxon percpu*/
 
         Ok(RustMiscdev {
-            _dev: miscdev::Registration::new_pinned(name, state)?,
+            _dev: miscdev::Registration::new_pinned(fmt!("{name}"), state)?,
         })
     }
 }
@@ -211,10 +162,10 @@ fn rkvm_set_vmxon(state: &RkvmState) -> Result<u32> {
         page.write(ptr.as_ptr(), 0, len);
     }
 
-    let mut vmxe: u64 = 0;
-    unsafe {
-        vmxe = bindings::native2_read_cr4() & bit(x86reg::Cr4::CR4_ENABLE_VMX);
-    }
+    let vmxe = unsafe {
+        bindings::native2_read_cr4() & bit(x86reg::Cr4::CR4_ENABLE_VMX)
+    };
+
     pr_info!("Rust kvm :vmxe {:}\n", vmxe);
     if vmxe > 0 {
         pr_info!("Rust kvm: vmx has been enabled\n");
@@ -230,22 +181,124 @@ fn rkvm_set_vmxon(state: &RkvmState) -> Result<u32> {
 
 const IOCTL_KVM_CREATE_VM: u32 = 0x00AE0100;
 const IOCTL_KVM_CREATE_VCPU: u32 = 0x00AE4100;
+const IOCTL_KVM_VCPU_RUN: u32 = 0x00AE8000;
+const IOCTL_KVM_SET_USER_MEMORY_REGION: u32 = 0x40AE4600;
+
+#[repr(C)]
+#[allow(dead_code)]
+struct RkvmUserspaceMemoryRegion {
+    slot: u32,
+    flags: u32,
+    guest_phys_addr: u64,
+    memory_size: u64,    //bytes
+    userspace_addr: u64, //start of the userspace allocated memory
+}
+
+static mut GUEST: Option<Ref<Mutex<Guest>>> = None;
+static mut VCPU: Option<Ref<Mutex<Vcpu>>> = None;
 
 impl IoctlHandler for RkvmState {
     type Target<'a> = &'a RkvmState;
 
-    fn pure(_shared: &RkvmState, _: &File, cmd: u32, _arg: usize) -> Result<i32> {
+    fn pure(_shared: &RkvmState, file: &File, cmd: u32, _arg: usize) -> Result<i32> {
         match cmd {
             IOCTL_KVM_CREATE_VM => {
+                if let Err(error) = rkvm_set_vmxon(_shared) {
+                    pr_err!("Rkvm: IOCTL_KVM_CREATE_VM failed\n");
+                    return Err(error);
+                }
+                let guest = Guest::new();
+
+                let guest = match guest {
+                    Err(error) => return Err(error),
+                    Ok(guest) => guest,
+                };
+                unsafe {
+                    GUEST = Some(guest);
+                }
                 pr_info!("Rust kvm: IOCTL_KVM_CREATE_VM\n");
                 Ok(0)
             }
             IOCTL_KVM_CREATE_VCPU => {
                 pr_info!("Rust kvm: IOCTL_KVM_CREATE_VCPU\n");
+                let guest = unsafe {
+                    match &GUEST {
+                        Some(e) => e.clone(),
+                        None => return Err(Error::ENOENT),
+                    }
+                };
+
+                let vcpu0 = Vcpu::new(guest);
+
+                let vcpu0 = match vcpu0 {
+                    Err(error) => return Err(error),
+                    Ok(vcpu0) => vcpu0,
+                };
+
+                vcpu0.lock().init(&_shared.vmcsconf);
+                let va = vcpu0.lock().get_run();
+
+                unsafe {
+                    //use for mmap
+                    (*file.ptr).private_data = va as *mut c_void;
+                    VCPU = Some(vcpu0);
+                }
                 Ok(0)
+            }
+            IOCTL_KVM_VCPU_RUN => {
+                pr_info!("Rust kvm: IOCTL_KVM_VCPU_RUN\n");
+                let vcpu = unsafe {
+                    match &VCPU {
+                        Some(vcpu) => vcpu,
+                        None => return Err(Error::ENOENT),
+                    }
+                };
+                let vcpu = vcpu.clone();
+                let ret = vcpu.lock().vcpu_run();
+
+                Ok(ret.try_into().unwrap())
+            }
+            _ => Err(Error::EINVAL),
+        }
+    }
+    fn write(
+        _shared: &RkvmState,
+        _file: &File,
+        cmd: u32,
+        reader: &mut UserSlicePtrReader,
+    ) -> Result<i32> {
+        match cmd {
+            IOCTL_KVM_SET_USER_MEMORY_REGION => {
+                pr_info!("Rust kvm: IOCTL_KVM_SET_USER_MEMORY_REGION\n");
+                let guest = unsafe {
+                    match &GUEST {
+                        Some(e) => e.clone(),
+                        None => return Err(Error::ENOENT),
+                    }
+                };
+                let mut uaddr_ = RkvmUserspaceMemoryRegion {
+                    slot: 0,
+                    flags: 0,
+                    guest_phys_addr: 0,
+                    memory_size: 0,
+                    userspace_addr: 0,
+                };
+                let len = reader.len();
+                unsafe {
+                    let mut ptr = core::slice::from_raw_parts_mut(
+                        (&mut uaddr_ as *mut RkvmUserspaceMemoryRegion) as *mut u8,
+                        len,
+                    );
+                    reader.read_raw(ptr.as_mut_ptr(), len)?;
+                }
+                let ret = guest.lock().add_memory_region(
+                    uaddr_.userspace_addr,
+                    uaddr_.memory_size >> 12,
+                    uaddr_.guest_phys_addr,
+                )?;
+               Ok(ret.try_into().unwrap())
             }
             _ => Err(Error::EINVAL),
         }
     }
 }
-

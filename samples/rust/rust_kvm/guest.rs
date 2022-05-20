@@ -25,8 +25,7 @@ impl Guest {
     pub(crate) fn new() -> Result<Ref<Mutex<Self>>> {
         let mm_ = Task::current().mm();
 
-        let g;
-        unsafe {
+        let g = unsafe {
             g = Ref::try_new(Mutex::new(Self {
                 mm: mm_,
                 memslot: RkvmMemorySlot {

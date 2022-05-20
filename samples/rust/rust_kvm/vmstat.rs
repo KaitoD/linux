@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 use kernel::prelude::*;
 
+#[repr(C)]
 #[allow(dead_code)]
 pub(crate) struct HostState {
     pub(crate) cr3: u64, /* May not match real cr3 */
@@ -19,8 +20,8 @@ pub(crate) struct HostState {
     pub(crate) xcr0: u64,
 }
 
+#[repr(C)]
 #[allow(dead_code)]
-#[derive(Default)]
 pub(crate) struct GuestState {
     //  RIP, RSP, and RFLAGS are automatically saved by VMX in the VMCS.
     pub(crate) rax: u64,
@@ -90,13 +91,14 @@ impl GuestState {
     }
 }
 
+#[repr(C)]
 pub(crate) struct VmxState {
     pub(crate) host_state: HostState,
     pub(crate) guest_state: GuestState,
 }
 
 impl VmxState {
-    pub(crate) fn new(&self) -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             host_state: HostState {
                 cr3: 0,

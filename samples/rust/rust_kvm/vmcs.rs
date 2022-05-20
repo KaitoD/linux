@@ -4,7 +4,7 @@
 //! See Intel SDM, Volume 3D, Appendix B.
 use kernel::bindings;
 use kernel::prelude::*;
-#[feature(global_asm)]
+use core::arch::global_asm;
 
 /// VM-execution, VM-exit, and VM-entry control fields
 
@@ -24,7 +24,6 @@ impl PinbasedControls {
     pub(crate) const VMX_PREEMPTION_TIMER: u32 = 6;
     pub(crate) const POSTED_INTERRUPTS: u32 = 7;
 }
-
 /// Primary processor-based VM-execution controls.
 ///
 /// A set of bitmask flags useful when setting up [`PRIMARY_PROCBASED_EXEC_CONTROLS`] VMCS field.
@@ -82,6 +81,7 @@ impl ExitControls {
     pub(crate) const HOST_ADDRESS_SPACE_SIZE: u32 = 1 << 9;
     pub(crate) const ACK_INTERRUPT_ON_EXIT: u32 = 1 << 15;
 }
+
 #[repr(u32)]
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
@@ -306,24 +306,24 @@ pub(crate) fn vmcs_write16(field: VmcsField, value: u16) {
 }
 
 pub(crate) fn vmcs_read32(field: VmcsField) -> u32 {
-    unsafe {
-        let ret = bindings::rkvm_vmcs_readl(field as u64);
-        return ret as u32;
-    }
+    let ret = unsafe {
+        bindings::rkvm_vmcs_readl(field as u64)
+    };
+    ret as u32
 }
 
 pub(crate) fn vmcs_read64(field: VmcsField) -> u64 {
-    unsafe {
-        let ret = bindings::rkvm_vmcs_readl(field as u64);
-        return ret;
-    }
+    let ret = unsafe {
+        bindings::rkvm_vmcs_readl(field as u64)
+    };
+    ret
 }
 
 pub(crate) fn vmcs_read16(field: VmcsField) -> u16 {
-    unsafe {
-        let ret = bindings::rkvm_vmcs_readl(field as u64);
-        return ret as u16;
-    }
+    let ret = unsafe {
+        bindings::rkvm_vmcs_readl(field as u64)
+    };
+    ret as u16
 }
 
 impl VmcsConfig {
@@ -342,7 +342,6 @@ impl VmcsConfig {
     }
 
     pub(crate) fn setup_config(&mut self) -> u32 {
-        let mut v: u64 = 0;
         let mut _pin_based_exec_control: u32 = 0;
         let mut _cpu_based_exec_control: u32 = 0;
         let mut _cpu_based_2nd_exec_control: u32 = 0;
@@ -362,9 +361,9 @@ impl VmcsConfig {
             | ExitControls::SAVE_DEBUG_CONTROLS;
         _vmentry_control = EntryControls::LOAD_DEBUG_CONTROLS;
 
-        unsafe {
-            v = bindings::rkvm_read_msr(bindings::MSR_IA32_VMX_BASIC);
-        }
+        let v = unsafe {
+            bindings::rkvm_read_msr(bindings::MSR_IA32_VMX_BASIC)
+        };
         let low: u32 = v as u32;
         let high: u32 = (v >> 32) as u32;
         self.size = high & 0x1fff;

@@ -4,6 +4,7 @@ use kernel::task::Task;
 use kernel::{bindings, Error, Result};
 //use kernel::rbtree::{RBTree, RBTreeNode};
 use kernel::sync::{Mutex, Ref};
+use crate::mmu::Rkvm_mmu;
 #[derive(Copy, Clone)]
 pub(crate) struct RkvmMemorySlot {
     //pub(crate) gfn_node: RBTreeNode,
@@ -17,7 +18,7 @@ pub(crate) struct Guest {
     pub(crate) mm: *const bindings::mm_struct,
     pub(crate) memslot: RkvmMemorySlot,
     pub(crate) nr_slot_pages: u64,
-    //pub(crate) mmu: Rkvm_mmu,
+    pub(crate) mmu: Rkvm_mmu,
 }
 
 impl Guest {
@@ -35,12 +36,14 @@ impl Guest {
                     as_id: 0,
                 },
                 nr_slot_pages: 0,
+                mmu: Mutex::new(),
             }))?;
         }
         Ok(g)
     }
-    pub(crate) fn mmu_init(&self) {
-        //ept init
+    pub(crate) fn mmu_init(&self) -> Result<u32> {
+        self.mmu.init_mmu_root();
+        Ok(0)
     }
     pub(crate) fn add_memory_region(&mut self, uaddr: u64, npages: u64, gpa: u64) -> Result<u32> {
         if gpa & (kernel::PAGE_SIZE - 1) as u64 != 0 {

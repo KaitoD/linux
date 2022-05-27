@@ -23,11 +23,11 @@ pub(crate) struct HostState {
 #[repr(C)]
 #[allow(dead_code)]
 pub(crate) struct GuestState {
-    //  RIP, RSP, and RFLAGS are automatically saved by VMX in the VMCS.
     pub(crate) rax: u64,
     pub(crate) rcx: u64,
     pub(crate) rdx: u64,
     pub(crate) rbx: u64,
+    pub(crate) rsp: u64,
     pub(crate) rbp: u64,
     pub(crate) rsi: u64,
     pub(crate) rdi: u64,
@@ -39,12 +39,7 @@ pub(crate) struct GuestState {
     pub(crate) r13: u64,
     pub(crate) r14: u64,
     pub(crate) r15: u64,
-
-    // Control registers.
-    pub(crate) cr2: u64,
-
-    // Extended control registers.
-    pub(crate) xcr0: u64,
+    pub(crate) rip: u64,
 }
 
 macro_rules! ONE {
@@ -118,6 +113,7 @@ impl VmxState {
                 rcx: 0,
                 rdx: 0,
                 rbx: 0,
+                rsp: 0,
                 rbp: 0,
                 rsi: 0,
                 rdi: 0,
@@ -129,8 +125,7 @@ impl VmxState {
                 r13: 0,
                 r14: 0,
                 r15: 0,
-                cr2: 0,
-                xcr0: 0,
+                rip: 0,
             },
         })
     }

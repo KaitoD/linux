@@ -1,5 +1,3 @@
-302 lines (265 sloc)  8.52 KB
-   
 // SPDX-License-Identifier: GPL-2.0
 
 //! Rust KVM for VMX
@@ -179,10 +177,12 @@ fn rkvm_set_vmxon(state: &RkvmState) -> Result<u32> {
     Ok(0)
 }
 
-const IOCTL_KVM_CREATE_VM: u32 = 0x00AE0100;
-const IOCTL_KVM_CREATE_VCPU: u32 = 0x00AE4100;
-const IOCTL_KVM_VCPU_RUN: u32 = 0x00AE8000;
-const IOCTL_KVM_SET_USER_MEMORY_REGION: u32 = 0x40AE4600;
+const IOCTL_KVM_CREATE_VM: u32 = 0x0000AE01;
+const IOCTL_KVM_CREATE_VCPU: u32 = 0x0000AE41;
+const IOCTL_KVM_VCPU_RUN: u32 = 0x0000AE80;
+const IOCTL_KVM_SET_USER_MEMORY_REGION: u32 = 0x4000AE46;
+const IOCTL_KVM_GET_REGS: u32 = 0x8090AE81;
+const IOCTL_KVM_SET_REGS: u32 = 0x4090AE82;
 
 #[repr(C)]
 #[allow(dead_code)]
@@ -283,7 +283,7 @@ impl IoctlHandler for RkvmState {
                     memory_size: 0,
                     userspace_addr: 0,
                 };
-                let len = reader.len();
+                let len = core::mem::size_of::<RkvmUserspaceMemoryRegion>();
                 unsafe {
                     let mut ptr = core::slice::from_raw_parts_mut(
                         (&mut uaddr_ as *mut RkvmUserspaceMemoryRegion) as *mut u8,

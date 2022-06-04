@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
-use super::Vcpu;
+use super::{Guest, GuestWrapper};
+use super::{Vcpu, VcpuWrapper};
 use crate::mmu::*;
 use crate::vmcs::*;
 use core::mem::MaybeUninit;
@@ -76,6 +77,7 @@ pub(crate) enum ExitReason {
     SPP_EVENT = 66,
     UMWAIT = 67,
     TPAUSE = 68,
+    BUSLOCK = 74,
     UNKNOWN = 200,
 }
 
@@ -119,6 +121,20 @@ impl From<u32> for ExitReason {
             46 => ExitReason::ACCESS_GDTR_OR_IDTR,
             47 => ExitReason::ACCESS_LDTR_OR_TR,
             48 => ExitReason::EPT_VIOLATION,
+            49 => ExitReason::EPT_MISCONFIGURATION,
+            50 => ExitReason::INVEPT,
+            51 => ExitReason::RDTSCP,
+            52 => ExitReason::VMX_PREEMPT_TIMER_EXPIRED,
+            53 => ExitReason::INVVPID,
+            54 => ExitReason::WBINVD,
+            55 => ExitReason::XSETBV,
+            56 => ExitReason::APIC_WRITE,
+            57 => ExitReason::RDRAND,
+            58 => ExitReason::INVPCID,
+            59 => ExitReason::VMFUNC,
+            60 => ExitReason::ENCLS,
+            61 => ExitReason::RDSEED,
+            62 => ExitReason::PAGE_MODIFICATION_LOG_FULL,
             _ => ExitReason::UNKNOWN,
         }
     }
@@ -196,11 +212,36 @@ impl ExitInfo {
     }
 }
 
-pub(crate) fn handle_hlt(exit_info: &ExitInfo, vcpu: &Vcpu) -> Result {
+pub(crate) fn handle_hlt(exit_info: &ExitInfo, vcpu: &VcpuWrapper) -> Result<u64> {
+    pr_info!(" handle_hlt \n");
+    let mut vcpuinner = vcpu.vcpuinner.lock();
+    let ptr = (vcpuinner.run.va + 8) as *mut u64;
+    unsafe {
+             (*ptr) = 5; //exit_info.exit_reason as u32;
+    }
     exit_info.next_rip();
-    Ok(())
+    Ok(0)
 }
 
+pub(crate) fn handle_io(exit_info: &ExitInfo, vcpu: &VcpuWrapper) -> Result<u64> {
+   pr_info!(" handle_io \n");
+   let exit_qualification = exit_info.exit_qualification;
+   let mut vcpuinner = vcpu.vcpuinner.lock();
+   let ptr = (vcpuinner.run.va + 8) as *mut u64;
+   unsafe {
+       (*ptr) = 2;
+       
+
+//       (*vcpuinner.run.ptr).exit_reason = exit_info.exit_reason as u32;
+       (*vcpuinner.run.ptr).io.port = (exit_qualification >> 16) as u16;
+       (*vcpuinner.run.ptr).io.size = ((exit_qualification & 7) + 1) as u8;
+       (*vcpuinner.run.ptr).io.direction = ((exit_qualification & 8) != 0) as u8;
+       (*vcpuinner.run.ptr).io.count = 1;
+
+   }
+   exit_info.next_rip();
+   Ok(0)
+}
 const LEVELBITS: u64 = 9;
 macro_rules! LEVEL_SHIFT {
     ($level:expr) => {
@@ -210,7 +251,7 @@ macro_rules! LEVEL_SHIFT {
 
 macro_rules! SHADOW_PT_INDEX {
     ($addr:expr, $level:expr) => {
-        (($addr) >> LEVEL_SHIFT!($level) & ((1 << LEVELBITS) - 1))
+        (($addr) >> (LEVEL_SHIFT!($level)) & ((1 << LEVELBITS) - 1))
     };
 }
 
@@ -224,11 +265,17 @@ macro_rules! RKVM_PAGES_PER_HPAGE {
         ((1 << ((($level) - 1) * 9 + bindings::PAGE_SHIFT as u64)) / PAGE_SIZE)
     };
 }
-fn rkvm_pagefault(vcpu: &Vcpu, fault: &mut RkvmPageFault) -> Result {
-    let slot = &vcpu.guest.lock().memslot;
+fn rkvm_pagefault(vcpu: &VcpuWrapper, fault: &mut RkvmPageFault) -> Result {
+    let vcpuinner = vcpu.vcpuinner.lock();
+    let slot = &vcpuinner.guest.guestinner.lock().memslot;
+
     let uaddr = slot.userspace_addr;
     let base_gfn = slot.base_gfn;
-    fault.hva = uaddr + (fault.gfn - base_gfn) * kernel::PAGE_SIZE as u64;
+    pr_info!(" ### rkvm_pagefault base_gfn={:x}, fault.gfn={:x} \n", base_gfn, fault.gfn);
+    if fault.gfn < base_gfn {
+       return Err(Error::EINVAL);
+    } 
+    fault.hva = uaddr + (fault.gfn - base_gfn) * (kernel::PAGE_SIZE as u64);
     let mut flags: u32 = bindings::FOLL_HWPOISON;
 
     let mut nrpages: i64 = 0;
@@ -240,15 +287,19 @@ fn rkvm_pagefault(vcpu: &Vcpu, fault: &mut RkvmPageFault) -> Result {
             return Err(Error::ENOMEM);
         }
         //pages = pages.assume_init();
-        let pfn = *pages.as_mut_ptr() as *const u64;
-        fault.pfn = *pfn;
+        let page = *pages.as_mut_ptr() as *mut bindings::page;
+        fault.pfn = bindings::rkvm_page_to_pfn(page);
         fault.goal_level = 1;
     }
-    pr_info!("pagefault: pfn={:?} \n", fault.pfn);
+    pr_info!("pagefault: pfn={:x} \n", fault.pfn);
     Ok(())
 }
 
-fn rkvm_read_spte(mmu_page: Ref<RkvmMmuPage>, gfn: u64, level: u64) -> u64 {
+fn rkvm_read_spte(mmu_page: Ref<RkvmMmuPage>, gfn: u64, level: u64) -> Result<u64> {
+    if level < 1 {
+       pr_info!(" rkvm_read_spte level={:?} < 1 \n", level);
+       return Err(Error::EINVAL);
+    }
     let offset: usize = SHADOW_PT_INDEX!((gfn >> bindings::PAGE_SHIFT), level) as usize;
     let mut spte: u64 = 0;
     let p = &mut spte;
@@ -256,28 +307,40 @@ fn rkvm_read_spte(mmu_page: Ref<RkvmMmuPage>, gfn: u64, level: u64) -> u64 {
         let ptr = core::slice::from_raw_parts_mut((p as *mut u64) as *mut u8, 8);
         mmu_page.pages.read(ptr.as_mut_ptr(), offset, 8);
     }
-    spte
+    Ok(spte)
 }
 
-fn rkvm_write_spte(mmu_page: Ref<RkvmMmuPage>, new_spte: u64, gfn: u64, level: u64) {
+fn rkvm_write_spte(mmu_page: Ref<RkvmMmuPage>, new_spte: u64, gfn: u64, level: u64) -> Result {
+    if level < 1 {
+       pr_info!(" rkvm_write_spte level={:?} < 1 \n", level);
+       return Err(Error::EINVAL);
+    }
     let offset: usize = SHADOW_PT_INDEX!((gfn >> bindings::PAGE_SHIFT), level) as usize;
     let p = &new_spte;
     unsafe {
         let ptr = core::slice::from_raw_parts((p as *const u64) as *const u8, 8);
         mmu_page.pages.write(ptr.as_ptr(), offset, 8);
     }
+    Ok(())
 }
 
-fn make_level_gfn(gfn: u64, level: u64) -> u64 {
-    let level_gfn = (gfn + 1) & (-1 * RKVM_PAGES_PER_HPAGE!(level) as i64) as u64;
-    level_gfn
+fn make_level_gfn(gfn: u64, level: u64) -> Result<u64> {
+    if gfn == 0 {
+       return Ok(0);
+    }
+    if level < 1 {
+       pr_info!(" make_level_gfn: level={:?} < 1 \n", level);
+       return Err(Error::EINVAL);
+    }
+    let level_gfn = gfn & (-1 * RKVM_PAGES_PER_HPAGE!(level) as i64) as u64;
+    Ok(level_gfn)
 }
 
 fn make_spte(pfn: u64) -> u64 {
     let mut spte: u64 = 1u64 << 11; //SPTE_MMU_PRESENT_MASK
     let pa = pfn << bindings::PAGE_SHIFT;
     //TODO: permission settings in pte
-    spte |= pa;
+    spte |= pa | 7u64 | 0x600000000000000;
     spte
 }
 
@@ -285,25 +348,35 @@ fn make_noleaf_spte(pt: u64) -> u64 {
     let mut spte: u64 = 1u64 << 11; //SPTE_MMU_PRESENT_MASK
     let pa = unsafe { bindings::rkvm_phy_address(pt) };
     //TODO: permission settings in pte
-    spte |= pa;
+    spte |= pa | 7u64;
     spte
 }
-fn rkvm_tdp_map(vcpu: &mut Vcpu, fault: &mut RkvmPageFault) -> Result {
+fn rkvm_tdp_map(vcpu: &VcpuWrapper, fault: &mut RkvmPageFault) -> Result {
     let mut level: u64 = 4;
+    let mut vcpuinner = vcpu.vcpuinner.lock();
     /*let mut pt_path = match vcpu.mmu.root_mmu_page.spt {
                           Some(spt) => spt,
                           None => return Err(Error::ENOMEM),
     };
     */
-    let mut level_gfn = make_level_gfn(fault.gfn, level);
-    let mut pre_mmu_page = vcpu.mmu.root_mmu_page.clone();
-    let mut spte = rkvm_read_spte(pre_mmu_page.clone(), level_gfn, level);
+
+    let level_gfn = make_level_gfn(fault.gfn, level);
+    let mut level_gfn = match level_gfn {
+       Ok(gfn) => gfn,
+       Err(e) => return Err(e),
+    };
+    let mut pre_mmu_page = vcpuinner.mmu.root_mmu_page.clone();
+    let spte = rkvm_read_spte(pre_mmu_page.clone(), level_gfn, level);
+    let mut spte = match spte {
+      Err(err) => return Err(err),
+      Ok(spte) => spte,
+    };
     while level > 0 {
         if level == fault.goal_level {
             break;
         }
-        if !vcpu.mmu.is_pte_present(spte) {
-            let mut mmu_page = vcpu.mmu.alloc_mmu_page(level - 1, level_gfn)?;
+        if !vcpuinner.mmu.is_pte_present(spte) {
+            let mut mmu_page = vcpuinner.mmu.alloc_mmu_page(level - 1, level_gfn)?;
             let child_spt = match mmu_page.spt {
                 Some(spt) => spt,
                 None => return Err(Error::ENOMEM),
@@ -311,7 +384,7 @@ fn rkvm_tdp_map(vcpu: &mut Vcpu, fault: &mut RkvmPageFault) -> Result {
             spte = make_noleaf_spte(child_spt);
             rkvm_write_spte(pre_mmu_page.clone(), spte, level_gfn, level - 1);
             pr_info!(
-                "rkvm_tdp_map level={:?}, gfn={:?}, spte={:?} \n",
+                "rkvm_tdp_map level={:?}, gfn={:x}, spte={:x} \n",
                 level,
                 level_gfn,
                 spte
@@ -319,8 +392,16 @@ fn rkvm_tdp_map(vcpu: &mut Vcpu, fault: &mut RkvmPageFault) -> Result {
             pre_mmu_page = mmu_page;
         }
         level -= 1;
-        level_gfn = make_level_gfn(fault.gfn, level);
-        spte = rkvm_read_spte(pre_mmu_page.clone(), level_gfn, level);
+        let tmp  = make_level_gfn(fault.gfn, level);
+        level_gfn = match tmp {
+          Ok(gfn) => gfn,
+          Err(e) => return Err(e),
+        };
+        let tmp = rkvm_read_spte(pre_mmu_page.clone(), level_gfn, level);
+        spte = match tmp {
+          Ok(spte) => spte,
+          Err(e) => return Err(e),
+        }
     } //while
       // handle leaf pte
 
@@ -329,13 +410,21 @@ fn rkvm_tdp_map(vcpu: &mut Vcpu, fault: &mut RkvmPageFault) -> Result {
         spte = make_spte(fault.pfn);
         //set pte
         rkvm_write_spte(pre_mmu_page, spte, level_gfn, level);
+        pr_info!(" ## spte={:x}, level_gfn={:x},level={:?} \n", spte, level_gfn, level);
     }
     Ok(())
 }
 
-pub(crate) fn handle_ept_violation(exit_info: &ExitInfo, vcpu: &mut Vcpu) -> Result {
+pub(crate) fn handle_ept_violation(exit_info: &ExitInfo, vcpu: &VcpuWrapper) -> Result<u64> {
     let mut error_code: u64 = 0;
+    {
+      let mut vcpuinner = vcpu.vcpuinner.lock();
+      unsafe {
+            (*vcpuinner.run.ptr).exit_reason = exit_info.exit_reason as u32;
+      }
+    }
     let gpa = vmcs_read64(VmcsField::GUEST_PHYSICAL_ADDRESS);
+    pr_info!("handle_ept_violation \n");
     if (exit_info.exit_qualification & EptViolationMask::EPT_VIOLATION_ACC_READ as u64) != 0 {
         error_code = PferrMask::PFERR_USER_MASK as u64;
     }
@@ -369,9 +458,14 @@ pub(crate) fn handle_ept_violation(exit_info: &ExitInfo, vcpu: &mut Vcpu) -> Res
         hva: 0,
         goal_level: 0,
     };
-
+    pr_info!(" gpa={:x}, error_code={:x}, present={:?} \n", gpa, error_code, fault.present);
     let ret = rkvm_pagefault(vcpu, &mut fault);
     //map
-    rkvm_tdp_map(vcpu, &mut fault);
-    return Ok(());
+    let ret = rkvm_tdp_map(vcpu, &mut fault);
+    match ret {
+       Ok(r) => r,
+       Err(e) => return Err(e),
+    };
+    unsafe { bindings::rkvm_invept(2, 0, 0) };
+    Ok(1)
 }

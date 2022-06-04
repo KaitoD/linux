@@ -54,8 +54,9 @@ impl RkvmMmu {
             Some(hpa) => hpa,
             None => return Err(Error::ENOMEM),
         };
+        pr_info!("RkvmMmu hpa(va) = {:x} \n", hpa);
         let mut hpa = unsafe { bindings::rkvm_phy_address(hpa) };
-
+        pr_info!("RkvmMmu hpa(phy) = {:x}--root_hpa \n", hpa);
         let mut mmu = UniqueRef::try_new(Self {
             root_hpa: hpa, //physical addr
             root_mmu_page: root.clone(),
@@ -78,10 +79,13 @@ impl RkvmMmu {
     }
 
     pub(crate) fn init_mmu_root(&mut self) -> Result {
-        ///TODO: pgd setting
+        //TODO: pgd setting
+        pr_info!(" ### init_mmu_root \n");
         let mut eptp: u64 = VmxEptpFlag::VMX_EPTP_MT_WB as u64 | VmxEptpFlag::VMX_EPTP_PWL_4 as u64;
-        eptp |= self.root_hpa;
+        eptp |= self.root_hpa /*| (1u64 << 6)*/;
         vmcs_write64(VmcsField::EPT_POINTER, eptp);
+        unsafe { bindings::rkvm_invept(1, eptp, 0) };
+
         Ok(())
     }
     pub(crate) fn is_pte_present(&self, pte: u64) -> bool {

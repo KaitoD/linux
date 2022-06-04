@@ -4,7 +4,9 @@
 //! See Intel SDM, Volume 3D, Appendix B.
 use kernel::bindings;
 use kernel::prelude::*;
-use core::arch::global_asm;
+use crate::x86reg::*;
+#[feature(global_asm)]
+//use kernel::sync::{Ref, UniqueRef};
 
 /// VM-execution, VM-exit, and VM-entry control fields
 
@@ -13,10 +15,12 @@ use core::arch::global_asm;
 /// A set of bitmask flags useful when setting up [`PINBASED_EXEC_CONTROLS`] VMCS field.
 ///
 /// See Intel SDM, Volume 3C, Section 24.6.1.
+#[allow(dead_code)]
 pub(crate) struct PinbasedControls {
     pub(crate) value: u32,
 }
 
+#[allow(dead_code)]
 impl PinbasedControls {
     pub(crate) const EXTERNAL_INTERRUPT_EXITING: u32 = 0;
     pub(crate) const NMI_EXITING: u32 = 3;
@@ -29,13 +33,22 @@ impl PinbasedControls {
 /// A set of bitmask flags useful when setting up [`PRIMARY_PROCBASED_EXEC_CONTROLS`] VMCS field.
 ///
 /// See Intel SDM, Volume 3C, Section 24.6.2, Table 24-6.
+#[allow(dead_code)]
 pub(crate) struct PrimaryControls {
     pub(crate) value: u32,
 }
 
+#[allow(dead_code)]
 impl PrimaryControls {
+    pub(crate) const INTERRUPT_WINDOW_EXITING: u32 = 1 << 2;
     pub(crate) const HLT_EXITING: u32 = 1 << 7;
     pub(crate) const MWAIT_EXITING: u32 = 1 << 10;
+    pub(crate) const CR3_LOAD_EXITING: u32 = 1 << 15;
+    pub(crate) const CR3_STORE_EXITING: u32 = 1 << 16;
+    pub(crate) const CR8_LOAD_EXITING: u32 = 1 << 19;
+    pub(crate) const CR8_STORE_EXITING: u32 = 1 << 20;
+    pub(crate) const UNCOND_IO_EXITING: u32 = 1 << 24;
+    pub(crate) const USE_IO_BITMAPS: u32 = 1 << 25;
     pub(crate) const MONITOR_EXITING: u32 = 1 << 29;
     pub(crate) const SECONDARY_CONTROLS: u32 = 1 << 31;
 }
@@ -45,6 +58,7 @@ impl PrimaryControls {
 /// A set of bitmask flags useful when setting up [`SECONDARY_PROCBASED_EXEC_CONTROLS`] VMCS field.
 ///
 /// See Intel SDM, Volume 3C, Section 24.6.2, Table 24-7.
+#[allow(dead_code)]
 pub(crate) struct SecondaryControls {
     pub(crate) value: u32,
 }
@@ -52,6 +66,7 @@ pub(crate) struct SecondaryControls {
 impl SecondaryControls {
     pub(crate) const UNRESTRICTED_GUEST: u32 = 1 << 7;
     pub(crate) const ENABLE_EPT: u32 = 1 << 1;
+    pub(crate) const ENABLE_VPID: u32 = 1 << 5; 
 }
 
 /// VM-entry controls.
@@ -59,12 +74,15 @@ impl SecondaryControls {
 /// A set of bitmask flags useful when setting up [`VMENTRY_CONTROLS`] VMCS field.
 ///
 /// See Intel SDM, Volume 3C, Section 24.8.
+#[allow(dead_code)]
 pub(crate) struct EntryControls {
     pub(crate) value: u32,
 }
 
 impl EntryControls {
     pub(crate) const LOAD_DEBUG_CONTROLS: u32 = 1 << 2;
+    pub(crate) const LOAD_IA32_PAT: u32 = 1 << 14;
+    pub(crate) const LOAD_IA32_EFER: u32 = 1 << 15;
 }
 
 /// VM-exit controls.
@@ -72,6 +90,8 @@ impl EntryControls {
 /// A set of bitmask flags useful when setting up [`VMEXIT_CONTROLS`] VMCS field.
 ///
 /// See Intel SDM, Volume 3C, Section 24.7.
+
+#[allow(dead_code)]
 pub(crate) struct ExitControls {
     pub(crate) value: u32,
 }
@@ -80,6 +100,10 @@ impl ExitControls {
     pub(crate) const SAVE_DEBUG_CONTROLS: u32 = 1 << 2;
     pub(crate) const HOST_ADDRESS_SPACE_SIZE: u32 = 1 << 9;
     pub(crate) const ACK_INTERRUPT_ON_EXIT: u32 = 1 << 15;
+    pub(crate) const SAVE_IA32_PAT:  u32 = 1 << 18;
+    pub(crate) const LOAD_IA32_PAT:  u32 = 1 << 19;
+    pub(crate) const SAVE_IA32_EFER: u32 = 1 << 20;
+    pub(crate) const LOAD_IA32_EFER: u32 = 1 << 21;
 }
 
 #[repr(u32)]
@@ -274,7 +298,7 @@ pub(crate) enum VmcsField {
     HOST_RSP = 0x00006c14,
     HOST_RIP = 0x00006c16,
 }
-
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub(crate) struct VmcsConfig {
     pub(crate) size: u32,
@@ -306,26 +330,97 @@ pub(crate) fn vmcs_write16(field: VmcsField, value: u16) {
 }
 
 pub(crate) fn vmcs_read32(field: VmcsField) -> u32 {
-    let ret = unsafe {
-        bindings::rkvm_vmcs_readl(field as u64)
-    };
+    let ret = unsafe { bindings::rkvm_vmcs_readl(field as u64) };
     ret as u32
 }
 
 pub(crate) fn vmcs_read64(field: VmcsField) -> u64 {
-    let ret = unsafe {
-        bindings::rkvm_vmcs_readl(field as u64)
-    };
-    ret
+    let ret = unsafe { bindings::rkvm_vmcs_readl(field as u64) };
+    ret as u64
 }
 
 pub(crate) fn vmcs_read16(field: VmcsField) -> u16 {
-    let ret = unsafe {
-        bindings::rkvm_vmcs_readl(field as u64)
-    };
+    let ret = unsafe { bindings::rkvm_vmcs_readl(field as u64) };
     ret as u16
 }
 
+fn read_msr(msr: X86Msr) -> u64 {
+    let val: u64 = unsafe { bindings::rkvm_read_msr(msr as u32)};
+    val
+}
+
+const X86_EFER_LME: u64 =  0x00000100;             /* long mode enable */
+const X86_EFER_LMA: u64 =  0x00000400;             /* long mode active */
+
+fn set_control(
+        field: VmcsField,
+        true_msr: u64,
+        old_msr: u64,
+        set: u32,
+        clear: u32,
+    ) -> Result<u32> {
+        let allowed_0 = true_msr as u32;
+        let allowed_1 = (true_msr >> 32) as u32;
+        if (allowed_1 & set) != set {
+            pr_info!("can not set vmcs controls {:?}", field);
+            return Err(Error::ENOTSUPP);
+        }
+        if (!allowed_0 & clear) != clear {
+            pr_info!("can not clear vmcs controls {:?}", field);
+            return Err(Error::ENOTSUPP);
+        }
+        if (set & clear) != 0 {
+            pr_info!(
+                "can not set and clear the same vmcs controls {:?}",
+                field
+            );
+            return Err(Error::EINVAL);
+        }
+
+        // See Volume 3, Section 31.5.1, Algorithm 3, Part C. If the control can be
+        // either 0 or 1 (flexible), and the control is unknown, then refer to the
+        // old MSR to find the default value.
+        let flexible = allowed_0 ^ allowed_1;
+        let unknown = flexible & !(set | clear);
+        let defaults = unknown & old_msr as u32;
+        //self.write32(field, allowed_0 | defaults | set);
+        Ok((allowed_0 | defaults | set))
+    }
+
+
+pub(crate) fn dump_vmcs() {
+       pr_info!(" VMCS Host: \n");
+       pr_info!(" cr0: {:x} \n", vmcs_read64(VmcsField::HOST_CR0));
+       pr_info!(" cr3: {:x} \n", vmcs_read64(VmcsField::HOST_CR3));
+       pr_info!(" cr4: {:x} \n", vmcs_read64(VmcsField::HOST_CR4));
+       pr_info!(" cs-sel: {:x} \n", vmcs_read16(VmcsField::HOST_CS_SELECTOR));
+       pr_info!(" ds-sel: {:x} \n", vmcs_read16(VmcsField::HOST_DS_SELECTOR));
+       pr_info!(" es-sel: {:x} \n", vmcs_read16(VmcsField::HOST_ES_SELECTOR));
+       pr_info!(" ss-sel: {:x} \n", vmcs_read16(VmcsField::HOST_SS_SELECTOR));
+       pr_info!(" fs-sel: {:x} \n", vmcs_read16(VmcsField::HOST_FS_SELECTOR)); /* 22.2.4 */
+       pr_info!(" gs-sel: {:x} \n", vmcs_read16(VmcsField::HOST_GS_SELECTOR)); /* 22.2.4 */
+       pr_info!(" tr-sel: {:x} \n", vmcs_read16(VmcsField::HOST_TR_SELECTOR));
+       pr_info!(" pat: {:x} \n", vmcs_read64(VmcsField::HOST_IA32_PAT));   
+       pr_info!(" efer: {:x} \n", vmcs_read64(VmcsField::HOST_IA32_EFER));  
+       pr_info!(" fs-base: {:x} \n", vmcs_read64(VmcsField::HOST_FS_BASE));
+       pr_info!(" gs-base: {:x} \n", vmcs_read64(VmcsField::HOST_GS_BASE));
+
+       pr_info!(" sysenter_esp: {:x} \n", vmcs_read64(VmcsField::HOST_IA32_SYSENTER_ESP));
+       pr_info!(" sysenter_eip: {:x} \n", vmcs_read64(VmcsField::HOST_IA32_SYSENTER_EIP));
+       pr_info!(" sysenter_cs: {:x} \n", vmcs_read32(VmcsField::HOST_IA32_SYSENTER_CS));
+
+       pr_info!(" tr_base: {:x} \n", vmcs_read64(VmcsField::HOST_TR_BASE));
+       pr_info!(" gdtr_base: {:x} \n", vmcs_read64(VmcsField::HOST_GDTR_BASE));
+       pr_info!(" idtr_base: {:x} \n", vmcs_read64(VmcsField::HOST_IDTR_BASE));
+
+       pr_info!(" pin_based={:x} \n",  vmcs_read32(VmcsField::PIN_BASED_VM_EXEC_CONTROL));
+       pr_info!(" cpu_based={:x} \n",  vmcs_read32(VmcsField::CPU_BASED_VM_EXEC_CONTROL));
+       pr_info!(" cpu2_based={:x} \n",  vmcs_read32(VmcsField::SECONDARY_VM_EXEC_CONTROL)); 
+       pr_info!(" exit={:x} \n",  vmcs_read32(VmcsField::VM_EXIT_CONTROLS));
+       pr_info!(" entry={:x} \n",  vmcs_read32(VmcsField::VM_ENTRY_CONTROLS));
+
+       
+}
 impl VmcsConfig {
     pub(crate) fn new() -> Result<Self> {
         let config = Self {
@@ -341,79 +436,270 @@ impl VmcsConfig {
         Ok(config)
     }
 
-    pub(crate) fn setup_config(&mut self) -> u32 {
+    pub(crate) fn setup_config(&mut self) -> Result<u32> {
         let mut _pin_based_exec_control: u32 = 0;
         let mut _cpu_based_exec_control: u32 = 0;
         let mut _cpu_based_2nd_exec_control: u32 = 0;
         let mut _vmexit_control: u32 = 0;
         let mut _vmentry_control: u32 = 0;
-
+        
         _pin_based_exec_control =
-            PinbasedControls::EXTERNAL_INTERRUPT_EXITING | PinbasedControls::NMI_EXITING;
-        _cpu_based_exec_control = PrimaryControls::HLT_EXITING
-            | PrimaryControls::MWAIT_EXITING
-            | PrimaryControls::MONITOR_EXITING
-            | PrimaryControls::SECONDARY_CONTROLS;
-        _cpu_based_2nd_exec_control =
-            SecondaryControls::UNRESTRICTED_GUEST | SecondaryControls::ENABLE_EPT;
-        _vmexit_control = ExitControls::ACK_INTERRUPT_ON_EXIT
-            | ExitControls::HOST_ADDRESS_SPACE_SIZE
-            | ExitControls::SAVE_DEBUG_CONTROLS;
-        _vmentry_control = EntryControls::LOAD_DEBUG_CONTROLS;
+            PinbasedControls::EXTERNAL_INTERRUPT_EXITING 
+            | PinbasedControls::NMI_EXITING;
 
-        let v = unsafe {
-            bindings::rkvm_read_msr(bindings::MSR_IA32_VMX_BASIC)
-        };
+        _cpu_based_exec_control = PrimaryControls::HLT_EXITING
+            //  | PrimaryControls::INTERRUPT_WINDOW_EXITING
+              | PrimaryControls::UNCOND_IO_EXITING
+            | PrimaryControls::SECONDARY_CONTROLS;
+           // | PrimaryControls::CR3_STORE_EXITING
+            //  | PrimaryControls::CR8_LOAD_EXITING
+            //  | PrimaryControls::CR8_STORE_EXITING;
+
+        _cpu_based_2nd_exec_control =
+            SecondaryControls::UNRESTRICTED_GUEST 
+            | SecondaryControls::ENABLE_EPT;
+            //| SecondaryControls::ENABLE_VPID;
+
+        _vmexit_control = ExitControls::HOST_ADDRESS_SPACE_SIZE
+              | ExitControls::SAVE_DEBUG_CONTROLS
+              | ExitControls::ACK_INTERRUPT_ON_EXIT;
+           // | ExitControls::SAVE_IA32_PAT
+           // | ExitControls::LOAD_IA32_PAT
+           //  | ExitControls::SAVE_IA32_EFER
+           // | ExitControls::LOAD_IA32_EFER;
+
+        _vmentry_control = EntryControls::LOAD_DEBUG_CONTROLS;
+                        //  | EntryControls::LOAD_IA32_PAT
+                        //   | EntryControls::LOAD_IA32_EFER;
+
+        let v = unsafe { bindings::rkvm_read_msr(bindings::MSR_IA32_VMX_BASIC) };
         let low: u32 = v as u32;
         let high: u32 = (v >> 32) as u32;
         self.size = high & 0x1fff;
         self.basic_cap = high & !0x1fff;
         self.revision_id = low;
-
-        self.pin_based_exec_ctrl = _pin_based_exec_control;
-        self.cpu_based_exec_ctrl = _cpu_based_exec_control;
-        self.cpu_based_2nd_exec_ctrl = _cpu_based_2nd_exec_control;
-        self.vmexit_ctrl = _vmexit_control;
-        self.vmentry_ctrl = _vmentry_control;
-
-        return 0;
+        let truev = read_msr(X86Msr::TRUE_PINBASED_CTLS);
+        let old = read_msr(X86Msr::PINBASED_CTLS);
+        self.pin_based_exec_ctrl = set_control(VmcsField::PIN_BASED_VM_EXEC_CONTROL,
+                                     truev, old,  _pin_based_exec_control, 0)?;
+        let truev = read_msr(X86Msr::TRUE_PROCBASED_CTLS);
+        let old = read_msr(X86Msr::PROCBASED_CTLS);
+        self.cpu_based_exec_ctrl =set_control(VmcsField::CPU_BASED_VM_EXEC_CONTROL,
+                                  truev, old, _cpu_based_exec_control, 0)?;
+        let truev = read_msr(X86Msr::PROCBASED_CTLS2);
+        self.cpu_based_2nd_exec_ctrl = set_control(VmcsField::SECONDARY_VM_EXEC_CONTROL,
+                                     truev, 0, _cpu_based_2nd_exec_control,0)?;
+        let truev = read_msr(X86Msr::TRUE_EXIT_CTLS);
+        let old = read_msr(X86Msr::EXIT_CTLS);
+        self.vmexit_ctrl = set_control(VmcsField::VM_EXIT_CONTROLS,
+                                    truev, old, _vmexit_control,0)?;
+        let truev = read_msr(X86Msr::TRUE_ENTRY_CTLS);
+         let old = read_msr(X86Msr::ENTRY_CTLS);
+        self.vmentry_ctrl = set_control(VmcsField::VM_ENTRY_CONTROLS,
+                                    truev, old,_vmentry_control, 0)?;
+        pr_info!(" setup pin={:x},cpu={:x}, cpu2={:x},exit={:x}, entry={:x} \n", 
+                    self.pin_based_exec_ctrl , self.cpu_based_exec_ctrl, self.cpu_based_2nd_exec_ctrl,
+                    self.vmexit_ctrl, self.vmentry_ctrl);
+        Ok(0)
     }
-
     pub(crate) fn set_host_constant_vmcs(&self) {
-        vmcs_write64(VmcsField::HOST_RIP, vmx_vmexit as u64);
+        
+        let mut cr0 = unsafe { bindings::native2_read_cr0() };
+        cr0 &= !(Cr0::CR0_TS as u64);
+        let cr3 = unsafe { bindings::native2_read_cr3() };
+        let cr4 = unsafe { bindings::cr4_read_shadow() };
+        vmcs_write64(VmcsField::HOST_CR0, cr0);
+        vmcs_write64(VmcsField::HOST_CR3, cr3);
+        vmcs_write64(VmcsField::HOST_CR4, cr4);
+        vmcs_write16(VmcsField::HOST_CS_SELECTOR, 16);
+        vmcs_write16(VmcsField::HOST_DS_SELECTOR, 0);
+        vmcs_write16(VmcsField::HOST_ES_SELECTOR, 0);
+        vmcs_write16(VmcsField::HOST_SS_SELECTOR, 24);
+        pr_info!("### HOST_SS_SELECTOR ={:x} \n", vmcs_read16(VmcsField::HOST_SS_SELECTOR));
+        vmcs_write16(VmcsField::HOST_FS_SELECTOR, 0); /* 22.2.4 */
+        vmcs_write16(VmcsField::HOST_GS_SELECTOR, 0); /* 22.2.4 */
+        vmcs_write16(VmcsField::HOST_TR_SELECTOR,64);
+        let fs = read_msr(X86Msr::FS_BASE);
+        vmcs_write64(VmcsField::HOST_FS_BASE, fs);
+        let gs = read_msr(X86Msr::GS_BASE);
+        vmcs_write64(VmcsField::HOST_GS_BASE, gs);
+
+        vmcs_write64(VmcsField::HOST_IA32_SYSENTER_ESP, 0);
+        vmcs_write64(VmcsField::HOST_IA32_SYSENTER_EIP, 0);
+        vmcs_write32(VmcsField::HOST_IA32_SYSENTER_CS, 0); 
+
+        let gdt = unsafe{ bindings::rkvm_get_current_gdt_ro() };
+        let tss = unsafe{ bindings::rkvm_get_current_tss_ro() };   
+        pr_info!("### get gdt={:x}, tss={:x}, fs={:x}, gs={:x}  \n", gdt, tss, fs, gs);
+
+        vmcs_write64(VmcsField::HOST_TR_BASE, tss);
+        vmcs_write64(VmcsField::HOST_GDTR_BASE, gdt);
+        vmcs_write64(VmcsField::HOST_IDTR_BASE, 0xfffffe0000000000);
+        vmcs_write32(VmcsField::VM_EXIT_MSR_LOAD_COUNT, 0);
+        vmcs_write64(VmcsField::HOST_RIP, vmx_exit as u64);
+        
     }
 
-    pub(crate) fn vcpu_vmcs_init(&self) {
+    pub(crate) fn vcpu_vmcs_init(&mut self) {
+        self.setup_config();
         vmcs_write64(VmcsField::VMCS_LINK_POINTER, 0xffffffffffffffff);
         vmcs_write32(
             VmcsField::PIN_BASED_VM_EXEC_CONTROL,
             self.pin_based_exec_ctrl,
         );
+        pr_info!("  pin_based = {:x} \n", self.pin_based_exec_ctrl);
         vmcs_write32(
             VmcsField::CPU_BASED_VM_EXEC_CONTROL,
             self.cpu_based_exec_ctrl,
         );
+        pr_info!("  cpu_based = {:x} \n", self.cpu_based_exec_ctrl);
         vmcs_write32(
             VmcsField::SECONDARY_VM_EXEC_CONTROL,
             self.cpu_based_2nd_exec_ctrl,
         );
+        pr_info!("  cpu_2nd_based = {:x} \n", self.cpu_based_2nd_exec_ctrl);
 
+        vmcs_write32(VmcsField::EXCEPTION_BITMAP, 0);
         vmcs_write32(VmcsField::PAGE_FAULT_ERROR_CODE_MASK, 0);
         vmcs_write32(VmcsField::PAGE_FAULT_ERROR_CODE_MATCH, 0);
         vmcs_write32(VmcsField::CR3_TARGET_COUNT, 0); /* 22.2.1 */
-
-        vmcs_write16(VmcsField::HOST_FS_SELECTOR, 0); /* 22.2.4 */
-        vmcs_write16(VmcsField::HOST_GS_SELECTOR, 0); /* 22.2.4 */
-        self.set_host_constant_vmcs();
+	self.set_host_constant_vmcs();
         vmcs_write32(VmcsField::VM_EXIT_CONTROLS, self.vmexit_ctrl);
         vmcs_write32(VmcsField::VM_ENTRY_CONTROLS, self.vmentry_ctrl);
+        pr_info!("  vmexit_ctrl = {:x} \n", self.vmexit_ctrl);
+        pr_info!("  vmentry_ctrl = {:x} \n", self.vmentry_ctrl);
+        vmcs_write32(VmcsField::VM_ENTRY_MSR_LOAD_COUNT, 0);
+        vmcs_write32(VmcsField::VM_ENTRY_INTR_INFO_FIELD, 0);
+        vmcs_write32(VmcsField::VM_EXIT_MSR_LOAD_COUNT, 0);
+        vmcs_write32(VmcsField::VM_EXIT_MSR_STORE_COUNT, 0);
+        
+        vmcs_write64(VmcsField::GUEST_CR0, 0x30);
+        vmcs_write64(VmcsField::CR0_READ_SHADOW, 0x60000010);
+        vmcs_write64(VmcsField::CR0_GUEST_HOST_MASK, 0xfffffffffffffff7);
+
+
+        vmcs_write64(VmcsField::GUEST_CR4, 0x00002040);
+        vmcs_write64(VmcsField::CR4_GUEST_HOST_MASK, 0xfffffffffffef871);
+        vmcs_write64(VmcsField::CR4_READ_SHADOW, 0);
+
+        vmcs_write32(VmcsField::GUEST_SYSENTER_CS, 0);
+	vmcs_write64(VmcsField::GUEST_SYSENTER_ESP, 0);
+	vmcs_write64(VmcsField::GUEST_SYSENTER_EIP, 0);
+	vmcs_write64(VmcsField::GUEST_IA32_DEBUGCTL, 0);
+        // vcpu reset 
+        vmcs_write16(VmcsField::GUEST_CS_SELECTOR, 0x0);
+        vmcs_write64(VmcsField::GUEST_CS_BASE, 0x0);
+        vmcs_write32(VmcsField::GUEST_CS_LIMIT, 0xffff);
+	vmcs_write32(VmcsField::GUEST_CS_AR_BYTES, 0x009b);
+
+        vmcs_write16(VmcsField::GUEST_TR_SELECTOR, 0);
+        vmcs_write64(VmcsField::GUEST_TR_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_TR_LIMIT, 0xffff);
+        vmcs_write32(VmcsField::GUEST_TR_AR_BYTES, 0x008b);
+
+        vmcs_write64(VmcsField::GUEST_DS_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_DS_LIMIT, 0xffff);
+        vmcs_write16(VmcsField::GUEST_DS_SELECTOR, 0x0);
+        vmcs_write32(VmcsField::GUEST_DS_AR_BYTES, 0x0093);
+
+        vmcs_write64(VmcsField::GUEST_SS_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_SS_LIMIT, 0xffff);
+        vmcs_write16(VmcsField::GUEST_SS_SELECTOR, 0x0);
+        vmcs_write32(VmcsField::GUEST_SS_AR_BYTES, 0x0093);
+
+        vmcs_write64(VmcsField::GUEST_ES_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_ES_LIMIT, 0xffff);
+        vmcs_write16(VmcsField::GUEST_ES_SELECTOR, 0x0);
+        vmcs_write32(VmcsField::GUEST_ES_AR_BYTES, 0x0093);
+
+        vmcs_write64(VmcsField::GUEST_FS_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_FS_LIMIT, 0xffff);
+        vmcs_write16(VmcsField::GUEST_FS_SELECTOR, 0x0);
+        vmcs_write32(VmcsField::GUEST_FS_AR_BYTES, 0x0093);
+
+        vmcs_write64(VmcsField::GUEST_GS_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_GS_LIMIT, 0xffff);
+        vmcs_write16(VmcsField::GUEST_GS_SELECTOR, 0x0);
+        vmcs_write32(VmcsField::GUEST_GS_AR_BYTES, 0x0093);
+
+        vmcs_write16(VmcsField::GUEST_LDTR_SELECTOR, 0);
+        vmcs_write64(VmcsField::GUEST_LDTR_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_LDTR_LIMIT, 0xffff);
+        vmcs_write32(VmcsField::GUEST_LDTR_AR_BYTES, 0x00082);
+
+        vmcs_write64(VmcsField::GUEST_GDTR_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_GDTR_LIMIT, 0xffff);
+        vmcs_write64(VmcsField::GUEST_IDTR_BASE, 0);
+        vmcs_write32(VmcsField::GUEST_IDTR_LIMIT, 0xffff);
+
+        vmcs_write64(VmcsField::GUEST_RFLAGS, 0x2);
+
+        vmcs_write32(VmcsField::GUEST_ACTIVITY_STATE, 0);
+        vmcs_write32(VmcsField::GUEST_INTERRUPTIBILITY_INFO, 0);
+        
+        vmcs_write64(VmcsField::GUEST_RSP, 0);
+        vmcs_write64(VmcsField::GUEST_CR3, 0);
+
+        let pat = read_msr(X86Msr::PAT);
+        vmcs_write64(VmcsField::GUEST_IA32_PAT, pat);
+        vmcs_write64(VmcsField::HOST_IA32_PAT, pat);
+        let mut efer = read_msr(X86Msr::EFER);
+        vmcs_write64(VmcsField::HOST_IA32_EFER, efer);
+        pr_info!(" host_efer = {:x} \n", efer);
+        efer &= !(X86_EFER_LME | X86_EFER_LMA);
+        vmcs_write64(VmcsField::GUEST_IA32_EFER, 0);
+        vmcs_write32(VmcsField::CR3_TARGET_COUNT,0);
+        vmcs_write64(VmcsField::TSC_OFFSET, 0);
+        pr_info!(" ### vcpu_vmcs_init \n");
     }
 } //impl
 
 extern "C" {
-    fn vmx_vmexit();
+    fn vmx_exit() -> u32;
 }
 
+global_asm!(
+    "
+.global vmx_exit
+vmx_exit:
+    // Store the guest registers not covered by the VMCS. At this point,
+    // guest_state is in RSP.
+    add     rsp, 17 * 8
+    push    r15
+    push    r14
+    push    r13
+    push    r12
+    push    r11
+    push    r10
+    push    r9
+    push    r8
+    push    rdi
+    push    rsi
+    push    rbp 
+    sub     rsp, 8 //rsp
+    push    rbx
+    push    rdx
+    push    rcx
+    push    rax
+    sub     rsp, 8
+
+    pop     rsp
+
+   // Load host callee save registers, return address, and processor flags.
+    pop     rbx
+    pop     r12
+    pop     r13
+    pop     r14
+    pop     r15
+    pop     rbp
+
+    // Return false
+    xor     rax, rax
+    ret
+"
+);
+
+/*
 global_asm!(
     "
 .global vmx_vmexit
@@ -421,3 +707,4 @@ vmx_vmexit:
    ret
 "
 );
+*/

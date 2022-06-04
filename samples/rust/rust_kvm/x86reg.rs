@@ -1,12 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0
+//use kernel::bit;
 
+//control registers
 pub(crate) struct Cr0 {
     pub(crate) value: usize,
 }
 
 impl Cr0 {
     pub(crate) const CR0_ENABLE_PAGING: usize = 31;
+    pub(crate) const CR0_TS: usize = 1 << 3;
 }
+
+pub(crate) struct Cr4 {
+    pub(crate) value: usize,
+}
+
+impl Cr4 {
+    pub(crate) const CR4_ENABLE_VMX: usize = 13;
+} 
 
 pub(crate) struct RFlags {
     pub(crate) value: u64,
@@ -21,10 +32,22 @@ impl RFlags {
     pub(crate) const FLAGS_CF: u64 = 0;
 }
 
-pub(crate) struct Cr4 {
-    pub(crate) value: usize,
-}
-
-impl Cr4 {
-    pub(crate) const CR4_ENABLE_VMX: usize = 13;
+#[repr(u32)]
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+#[allow(non_camel_case_types)]
+pub(crate) enum X86Msr {
+   FS_BASE = 0xc0000100,            /* fs base address */
+   GS_BASE = 0xc0000101,            /* gs base address */
+   PAT     = 0x00000277,
+   EFER    = 0xc0000080,
+   PINBASED_CTLS = 0x0481,
+   PROCBASED_CTLS = 0x0482,
+   EXIT_CTLS = 0x0483,
+   ENTRY_CTLS = 0x0484,
+   PROCBASED_CTLS2 = 0x048b,
+   TRUE_PINBASED_CTLS = 0x048d,
+   TRUE_PROCBASED_CTLS = 0x048e,
+   TRUE_EXIT_CTLS = 0x048f,
+   TRUE_ENTRY_CTLS = 0x490,
 }

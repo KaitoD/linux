@@ -1,28 +1,45 @@
 // SPDX-License-Identifier: GPL-2.0
 use kernel::prelude::*;
+//use kernel::sync::Ref;
 
 #[repr(C)]
 #[allow(dead_code)]
 pub(crate) struct HostState {
+    pub(crate) host_rsp: u64,
     pub(crate) cr3: u64, /* May not match real cr3 */
     pub(crate) cr4: u64, /* May not match real cr4 */
     pub(crate) gs_base: u64,
     pub(crate) fs_base: u64,
-    // Host stack pointer.
-    pub(crate) rsp: u64,
-
     pub(crate) fs_sel: u16,
     pub(crate) gs_sel: u16,
     pub(crate) ldt_sel: u16,
     pub(crate) ds_sel: u16,
     pub(crate) es_sel: u16,
-    // Extended control registers.
-    pub(crate) xcr0: u64,
+}
+
+impl HostState {
+   pub(crate) fn new() -> Self {
+       Self{
+           host_rsp: 0,
+                cr3: 0,
+                cr4: 0,
+                fs_base: 0,
+                gs_base: 0,
+                fs_sel: 0,
+                gs_sel: 0,
+                ldt_sel: 0,
+                ds_sel: 0,
+                es_sel: 0,
+       }
+  }
 }
 
 #[repr(C)]
 #[allow(dead_code)]
+#[derive(Copy, Clone)]
 pub(crate) struct GuestState {
+    //  RIP, RSP, and RFLAGS are automatically saved by VMX in the VMCS.
+    pub(crate) host_rsp: u64,
     pub(crate) rax: u64,
     pub(crate) rcx: u64,
     pub(crate) rdx: u64,
@@ -39,6 +56,7 @@ pub(crate) struct GuestState {
     pub(crate) r13: u64,
     pub(crate) r14: u64,
     pub(crate) r15: u64,
+    pub(crate) launched: bool,
     pub(crate) rip: u64,
 }
 
@@ -55,6 +73,30 @@ macro_rules! BITS_SHIFT {
 
 #[allow(dead_code)]
 impl GuestState {
+    pub(crate) fn new() -> Self {
+       Self{
+                host_rsp: 0,
+                rax: 0,
+                rcx: 0,
+                rdx: 0,
+                rbx: 0,
+                rsp: 0,
+                rbp: 0,
+                rsi: 0,
+                rdi: 0,
+                r8: 0,
+                r9: 0,
+                r10: 0,
+                r11: 0,
+                r12: 0,
+                r13: 0,
+                r14: 0,
+                r15: 0,
+                rip: 0,
+               launched: false,
+       }
+
+    }
     // Convenience getters for accessing low 32-bits of common registers.
     pub(crate) fn get_eax(&self) -> u32 {
         return self.rax as u32;
@@ -88,45 +130,16 @@ impl GuestState {
 
 #[repr(C)]
 pub(crate) struct VmxState {
-    pub(crate) host_state: HostState,
     pub(crate) guest_state: GuestState,
+    pub(crate) host_state: HostState,
 }
 
 impl VmxState {
-    pub(crate) fn new() -> Result<Self> {
-        Ok(Self {
-            host_state: HostState {
-                cr3: 0,
-                cr4: 0,
-                fs_base: 0,
-                gs_base: 0,
-                rsp: 0,
-                fs_sel: 0,
-                gs_sel: 0,
-                ldt_sel: 0,
-                ds_sel: 0,
-                es_sel: 0,
-                xcr0: 0,
-            },
-            guest_state: GuestState {
-                rax: 0,
-                rcx: 0,
-                rdx: 0,
-                rbx: 0,
-                rsp: 0,
-                rbp: 0,
-                rsi: 0,
-                rdi: 0,
-                r8: 0,
-                r9: 0,
-                r10: 0,
-                r11: 0,
-                r12: 0,
-                r13: 0,
-                r14: 0,
-                r15: 0,
-                rip: 0,
-            },
-        })
+    pub(crate) fn new() -> Self {
+        let v = Self {
+            host_state: HostState::new(),
+            guest_state: GuestState::new(),
+        };
+        v
     }
 }

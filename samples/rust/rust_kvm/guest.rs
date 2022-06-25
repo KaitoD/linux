@@ -57,17 +57,26 @@ impl GuestWrapper {
         Ok(g.into())
     }
 
-    pub(crate) fn mmu_init(&self) {
-        //ept init
-    }
     pub(crate) fn add_memory_region(&self, uaddr: u64, npages: u64, gpa: u64) -> Result<i32> {
         if gpa & (kernel::PAGE_SIZE - 1) as u64 != 0 {
             return Err(Error::ENOMEM);
         }
         let mut guestinner = self.guestinner.lock();
         guestinner.memslot.userspace_addr = uaddr;
-        guestinner.memslot.base_gfn = gpa >> 12u32;
+        guestinner.memslot.base_gfn = gpa >> 12;
         guestinner.memslot.npages = npages;
+        pr_info!(
+            " add_memory_region user={:x}, gpa = {:x}, npages={:x} \n",
+            uaddr,
+            gpa,
+            npages
+        );
         Ok(0)
+    }
+}
+
+impl Drop for GuestWrapper {
+    fn drop(&mut self) {
+        pr_info!(" guest droped \n");
     }
 }

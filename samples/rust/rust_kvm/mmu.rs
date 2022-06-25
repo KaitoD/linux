@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 use kernel::{
     bindings,
+    c_types::c_void,
     linked_list::{GetLinks, Links, List},
     pages::Pages,
     prelude::*,
     sync::{Ref, UniqueRef},
-    Result,
+    Result, PAGE_SIZE,
 };
 
 use crate::vmcs::*;
-//use alloc::vec::Vec;
+use crate::x86reg::*;
+
 #[repr(u64)]
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -28,7 +30,7 @@ enum VmxEptpFlag {
 #[derive(Debug)]
 #[allow(dead_code)]
 #[allow(non_camel_case_types)]
-enum VmxEptFlag {
+pub(crate) enum VmxEptFlag {
     VMX_EPT_READABLE_MASK = 0x1,
     VMX_EPT_WRITABLE_MASK = 0x2,
     VMX_EPT_EXECUTABLE_MASK = 0x4,
@@ -37,10 +39,89 @@ enum VmxEptFlag {
     VMX_EPT_DIRTY_BIT = (1 << 9),
 }
 
+#[repr(u64)]
+#[derive(Debug)]
+#[allow(dead_code)]
+#[allow(non_camel_case_types)]
+pub(crate) enum SpteFlag {
+    SPTE_TDP_AD_MASK = (3 << 52),
+    SPTE_TDP_AD_ENABLED_MASK = (0 << 52),
+    SPTE_TDP_AD_DISABLED_MASK = (1 << 52),
+    SPTE_TDP_AD_WRPROT_ONLY_MASK = (2 << 52),
+    EPT_SPTE_HOST_WRITABLE = (1 << 57),
+    EPT_SPTE_MMU_WRITABLE = (1 << 58),
+}
+
+#[repr(u64)]
+#[derive(Debug)]
+#[allow(dead_code)]
+#[allow(non_camel_case_types)]
+enum VmxEptCapFlag {
+    /* Appendix A.10  */
+    VMX_EPT_EXECUTE_ONLY_BIT = 0x1,
+    VMX_EPT_PAGE_WALK_4_BIT = (1 << 6),
+    VMX_EPT_PAGE_WALK_5_BIT = (1 << 7),
+    VMX_EPTP_UC_BIT = (1 << 8),
+    VMX_EPTP_WB_BIT = (1 << 14),
+    VMX_EPT_2MB_PAGE_BIT = (1 << 16),
+    VMX_EPT_1GB_PAGE_BIT = (1 << 17),
+    VMX_EPT_INVEPT_BIT = (1 << 20),
+    VMX_EPT_AD_BIT = (1 << 21),
+    VMX_EPT_EXTENT_CONTEXT_BIT = (1 << 25),
+    VMX_EPT_EXTENT_GLOBAL_BIT = (1 << 26),
+}
+
+pub(crate) struct EptMasks {
+    pub(crate) ept_user_mask: u64,
+    pub(crate) ept_accessed_mask: u64,
+    pub(crate) ept_dirty_mask: u64,
+    pub(crate) ept_exec_mask: u64,
+    pub(crate) ept_present_mask: u64,
+    // ept_acc_track_mask: u64,
+    pub(crate) ad_disabled: bool,
+    pub(crate) has_exec_only: bool,
+}
+
+impl EptMasks {
+    fn new() -> Result<Ref<Self>> {
+        let ept_cap = read_msr(X86Msr::VMX_EPT_VPID_CAP);
+        
+        let user_mask = VmxEptFlag::VMX_EPT_READABLE_MASK as u64;
+        let mut a_mask = VmxEptFlag::VMX_EPT_ACCESS_BIT as u64;
+        let mut d_mask = VmxEptFlag::VMX_EPT_DIRTY_BIT as u64;
+        let mut ad_disabled = false;
+        if (ept_cap & VmxEptCapFlag::VMX_EPT_AD_BIT as u64) == 0 {
+            a_mask = 0;
+            d_mask = 0;
+            ad_disabled = true;
+        }
+        let x_mask = VmxEptFlag::VMX_EPT_EXECUTABLE_MASK as u64;
+        let mut present_mask = VmxEptFlag::VMX_EPT_READABLE_MASK as u64;
+        let mut has_exec_only = false;
+        if (ept_cap & VmxEptCapFlag::VMX_EPT_EXECUTE_ONLY_BIT as u64) != 0 {
+            present_mask = 0;
+            has_exec_only = true;
+        }
+
+        let pte_flags = Ref::try_new(Self {
+            ept_user_mask: user_mask,
+            ept_accessed_mask: a_mask,
+            ept_dirty_mask: d_mask,
+            ept_exec_mask: x_mask,
+            ept_present_mask: present_mask,
+            ad_disabled: ad_disabled,
+            has_exec_only: has_exec_only,     
+        })?;
+
+        Ok(pte_flags)
+    }
+}
+
 pub(crate) struct RkvmMmu {
     pub(crate) root_hpa: u64,
     pub(crate) root_mmu_page: Ref<RkvmMmuPage>,
     mmu_pages_list: List<Ref<RkvmMmuPage>>,
+    pub(crate) spte_flags: Ref<EptMasks>,
 }
 
 impl RkvmMmu {
@@ -50,22 +131,36 @@ impl RkvmMmu {
             Ok(root) => root,
             Err(err) => return Err(err),
         };
+
         let hpa = match root.spt {
             Some(hpa) => hpa,
             None => return Err(Error::ENOMEM),
         };
         pr_info!("RkvmMmu hpa(va) = {:x} \n", hpa);
-        let mut hpa = unsafe { bindings::rkvm_phy_address(hpa) };
+        let ptr = hpa as *mut c_void;
+        unsafe {
+            bindings::memset(ptr, 0, PAGE_SIZE as u64);
+        }
+        let hpa = unsafe { bindings::rkvm_phy_address(hpa) };
         pr_info!("RkvmMmu hpa(phy) = {:x}--root_hpa \n", hpa);
+
+        let flags = EptMasks::new();
+        let flags = match flags {
+            Ok(flags) => flags,
+            Err(err) => return Err(err),
+        };
+        pr_info!("ad_disabled = {}, ecex_only = {}", flags.ad_disabled, flags.has_exec_only);
+        
+
         let mut mmu = UniqueRef::try_new(Self {
             root_hpa: hpa, //physical addr
             root_mmu_page: root.clone(),
             mmu_pages_list: List::new(),
+            spte_flags: flags.clone(),
         })?;
 
         mmu.mmu_pages_list.push_back(root);
         Ok(mmu)
-        //let guest_cr3 =
     }
     pub(crate) fn alloc_mmu_page(&mut self, level: u64, gfn: u64) -> Result<Ref<RkvmMmuPage>> {
         let mmu_page = RkvmMmuPage::new(false, level, Some(gfn));
@@ -73,17 +168,31 @@ impl RkvmMmu {
             Ok(page) => page,
             Err(err) => return Err(err),
         };
+        let vaddr = match mmu_page.spt {
+            Some(va) => va,
+            None => return Err(Error::ENOMEM),
+        };
+        let ptr = vaddr as *mut c_void;
+        unsafe {
+            bindings::memset(ptr, 0, PAGE_SIZE as u64);
+        }
         let ret = mmu_page.clone();
         self.mmu_pages_list.push_back(mmu_page);
         Ok(ret)
     }
 
+    pub(crate) fn make_eptp(&mut self) -> u64 {
+        let mut eptp: u64 = VmxEptpFlag::VMX_EPTP_MT_WB as u64 | VmxEptpFlag::VMX_EPTP_PWL_4 as u64;
+        eptp |= self.root_hpa; //| (1u64 << 6);
+        eptp
+    }
+
     pub(crate) fn init_mmu_root(&mut self) -> Result {
         //TODO: pgd setting
         pr_info!(" ### init_mmu_root \n");
-        let mut eptp: u64 = VmxEptpFlag::VMX_EPTP_MT_WB as u64 | VmxEptpFlag::VMX_EPTP_PWL_4 as u64;
-        eptp |= self.root_hpa /*| (1u64 << 6)*/;
+        let eptp = self.make_eptp();
         vmcs_write64(VmcsField::EPT_POINTER, eptp);
+        pr_info!("hpa= {:x}, eptp = {:x} \n", self.root_hpa, eptp);
         unsafe { bindings::rkvm_invept(1, eptp, 0) };
 
         Ok(())
@@ -123,7 +232,7 @@ impl RkvmMmuPage {
 
         Ok(mmu_page)
     }
-} //
+}
 
 impl GetLinks for RkvmMmuPage {
     type EntryType = RkvmMmuPage;

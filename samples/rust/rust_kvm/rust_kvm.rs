@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
 //! Rust KVM for VMX
-//use core::mem::size_of;
 #[allow(missing_docs)]
 use kernel::c_types::c_void;
 use kernel::mm::virt::Area;
@@ -10,10 +9,10 @@ use kernel::{
     bindings, bit,
     file::File,
     file_operations::{FileOperations, IoctlCommand, IoctlHandler},
-    io_buffer::{IoBufferReader,IoBufferWriter},
+    io_buffer::{IoBufferReader, IoBufferWriter},
     miscdev,
     sync::{CondVar, Mutex, Ref, RefBorrow, UniqueRef},
-    user_ptr::{UserSlicePtrReader,UserSlicePtrWriter},
+    user_ptr::{UserSlicePtrReader, UserSlicePtrWriter},
     Result,
 };
 
@@ -25,10 +24,10 @@ mod vmcs;
 mod vmstat;
 mod x86reg;
 
-use crate::guest::{Guest, GuestWrapper};
+use crate::guest::GuestWrapper;
 use crate::vcpu::*;
 use crate::vmcs::*;
-use crate::x86reg::Cr4;
+
 
 module! {
     type: RustMiscdev,
@@ -57,12 +56,17 @@ impl RkvmState {
     fn try_new() -> Result<Ref<Self>> {
         pr_info!("RkvmState try_new \n");
         let mut vmcsconf = VmcsConfig::new()?;
-        let ret = vmcsconf.setup_config()?;
+        let _ret = vmcsconf.setup_config()?;
         let mut state = Pin::from(UniqueRef::try_new(Self {
             // SAFETY: `condvar_init!` is called below.
             state_changed: unsafe { CondVar::new() },
             // SAFETY: `mutex_init!` is called below.
-            inner: unsafe { Mutex::new(SharedStateInner { token_count: 0, vmcsconf: vmcsconf, }) },
+            inner: unsafe {
+                Mutex::new(SharedStateInner {
+                    token_count: 0,
+                    vmcsconf: vmcsconf,
+                })
+            },
         })?);
 
         // SAFETY: `state_changed` is pinned when `state` is.
@@ -111,7 +115,7 @@ impl KernelModule for RustMiscdev {
 
         let state = RkvmState::try_new()?;
         Ok(RustMiscdev {
-            _dev: miscdev::Registration::new_pinned(name, state)?,
+            _dev: miscdev::Registration::new_pinned(fmt!("{name}"), state)?,
         })
     }
 }
@@ -123,9 +127,8 @@ impl Drop for RustMiscdev {
     }
 }
 
-
 static mut VMXON_VMCS: Option<RkvmPage<RkvmVmcs>> = None;
-fn rkvm_set_vmxon(state: &RkvmState) -> Result<u32> {   
+fn rkvm_set_vmxon(state: &RkvmState) -> Result<u32> {
     let revision_id = state.inner.lock().vmcsconf.revision_id;
     let vmcs = alloc_vmcs(revision_id);
     let vmcs = match vmcs {
@@ -148,12 +151,12 @@ fn rkvm_set_vmxon(state: &RkvmState) -> Result<u32> {
     Ok(0)
 }
 
-const IOCTL_KVM_CREATE_VM:   u32 = 0x0000AE01;
+const IOCTL_KVM_CREATE_VM: u32 = 0x0000AE01;
 const IOCTL_KVM_CREATE_VCPU: u32 = 0x0000AE41;
 const IOCTL_KVM_VCPU_RUN: u32 = 0x0000AE80;
 const IOCTL_KVM_SET_USER_MEMORY_REGION: u32 = 0x4020AE46;
-const IOCTL_KVM_GET_REGS:  u32 = 0x8090AE81;
-const IOCTL_KVM_SET_REGS:  u32 = 0x4090AE82;
+const IOCTL_KVM_GET_REGS: u32 = 0x8090AE81;
+const IOCTL_KVM_SET_REGS: u32 = 0x4090AE82;
 const IOCTL_KVM_GET_SREGS: u32 = 0x8138AE83;
 const IOCTL_KVM_SET_SREGS: u32 = 0x4138AE84;
 #[repr(C)]
@@ -198,7 +201,7 @@ impl IoctlHandler for RkvmState {
                         None => return Err(Error::ENOENT),
                     }
                 };
-                pr_info!("Rust kvm: IOCTL_KVM_CREATE_VCPU ---0\n");
+                pr_info!("Rust kvm: IOCTL_KVM_CREATE_VCPU \n");
                 let revision_id = _shared.inner.lock().vmcsconf.revision_id;
                 let vcpu0 = VcpuWrapper::new(guest, revision_id);
 
@@ -206,11 +209,9 @@ impl IoctlHandler for RkvmState {
                     Err(error) => return Err(error),
                     Ok(vcpu0) => vcpu0,
                 };
-                pr_info!("Rust kvm: IOCTL_KVM_CREATE_VCPU ---1\n");
 
-                //vcpu0.init(&_shared.vmcsconf);
+                vcpu0.init(&mut _shared.inner.lock().vmcsconf);
                 let va = vcpu0.get_run();
-		vcpu0.clone();
                 unsafe {
                     //use for mmap
                     (*file.ptr).private_data = va as *mut c_void;
@@ -218,7 +219,7 @@ impl IoctlHandler for RkvmState {
                     VCPU = Some(vcpu0);
                 }
 
-                pr_info!("Rust kvm: IOCTL_KVM_CREATE_VCPU --2\n");
+                pr_info!("Rust kvm: IOCTL_KVM_CREATE_VCPU finish\n");
 
                 Ok(0)
             }
@@ -231,9 +232,9 @@ impl IoctlHandler for RkvmState {
                     }
                 };
 
-                vcpu.init(&mut _shared.inner.lock().vmcsconf);
+                //vcpu.init(&mut _shared.inner.lock().vmcsconf);
                 let ret = vcpu.vcpu_run();
-		
+
                 Ok(ret.try_into().unwrap())
             }
             _ => Err(Error::EINVAL),
@@ -246,56 +247,63 @@ impl IoctlHandler for RkvmState {
         writer: &mut UserSlicePtrWriter,
     ) -> Result<i32> {
         match cmd {
-           IOCTL_KVM_GET_REGS => {
+            IOCTL_KVM_GET_REGS => {
                 pr_info!("Rust kvm: IOCTL_KVM_GET_REGS\n");
                 let vcpu = unsafe {
                     match &VCPU {
                         Some(e) => e.clone(),
                         None => return Err(Error::ENOENT),
-                   }
+                    }
                 };
                 let mut uaddr = RkvmRegs {
-                    rax: 0, rbx: 0, rcx: 0, rdx: 0, 
-                    rsi: 0, rdi: 0, rsp: 0, rbp: 0,
-                    r8: 0, r9: 0, r10: 0, r11: 0,
-                    r12: 0, r13: 0, r14: 0, r15: 0,
-                    rip: 0, rflags: 0,
+                    rax: 0,
+                    rbx: 0,
+                    rcx: 0,
+                    rdx: 0,
+                    rsi: 0,
+                    rdi: 0,
+                    rsp: 0,
+                    rbp: 0,
+                    r8: 0,
+                    r9: 0,
+                    r10: 0,
+                    r11: 0,
+                    r12: 0,
+                    r13: 0,
+                    r14: 0,
+                    r15: 0,
+                    rip: 0,
+                    rflags: 0,
                 };
                 vcpu.get_regs(&mut uaddr);
                 let len = core::mem::size_of::<RkvmRegs>();
                 unsafe {
-                    let ptr = core::slice::from_raw_parts(
-                        (&uaddr as *const RkvmRegs) as *const u8,
-                        len,
-                    );
+                    let ptr =
+                        core::slice::from_raw_parts((&uaddr as *const RkvmRegs) as *const u8, len);
                     writer.write_raw(ptr.as_ptr(), len)?;
-                }     
+                }
                 Ok(0)
-           }
-          IOCTL_KVM_GET_SREGS => {
+            }
+            IOCTL_KVM_GET_SREGS => {
                 pr_info!("Rust kvm: IOCTL_KVM_GET_SREGS\n");
                 let vcpu = unsafe {
                     match &VCPU {
                         Some(e) => e.clone(),
                         None => return Err(Error::ENOENT),
-                   }
+                    }
                 };
                 let mut uaddr = RkvmSregs::new();
                 vcpu.get_sregs(&mut uaddr);
                 let len = core::mem::size_of::<RkvmSregs>();
                 unsafe {
-                    let ptr = core::slice::from_raw_parts(
-                        (&uaddr as *const RkvmSregs) as *const u8,
-                        len,
-                    );
+                    let ptr =
+                        core::slice::from_raw_parts((&uaddr as *const RkvmSregs) as *const u8, len);
                     writer.write_raw(ptr.as_ptr(), len)?;
                 }
-                Ok(0)    
-           }
-           _ => Err(Error::EINVAL),
-
-       }
-
+                Ok(0)
+            }
+            _ => Err(Error::EINVAL),
+        }
     }
     fn write(
         _shared: &RkvmState,
@@ -321,7 +329,7 @@ impl IoctlHandler for RkvmState {
                 };
                 let len = core::mem::size_of::<RkvmUserspaceMemoryRegion>();
                 pr_info!("Rust kvm: IOCTL_KVM_SET_USER_MEMORY_REGION len={:?}\n", len);
-           
+
                 unsafe {
                     let ptr = core::slice::from_raw_parts_mut(
                         (&mut uaddr_ as *mut RkvmUserspaceMemoryRegion) as *mut u8,
@@ -335,27 +343,38 @@ impl IoctlHandler for RkvmState {
                     uaddr_.memory_size >> 12,
                     uaddr_.guest_phys_addr,
                 );
-                pr_info!(" add_memory_region user={:x}, gpa = {:x} \n", uaddr_.userspace_addr, uaddr_.guest_phys_addr);
                 ret
-
-           }
-           IOCTL_KVM_SET_REGS => {
+            }
+            IOCTL_KVM_SET_REGS => {
                 pr_info!("Rust kvm: IOCTL_KVM_SET_REGS \n");
                 let vcpu = unsafe {
                     match &VCPU {
                         Some(e) => e.clone(),
                         None => return Err(Error::ENOENT),
-                   }
+                    }
                 };
                 let mut uaddr_ = RkvmRegs {
-                    rax: 0, rbx: 0, rcx: 0, rdx: 0, 
-                    rsi: 0, rdi: 0, rsp: 0, rbp: 0,
-                    r8: 0, r9: 0, r10: 0, r11: 0,
-                    r12: 0, r13: 0, r14: 0, r15: 0,
-                    rip: 0, rflags: 0,
-                 };
- 
-                let len = core::mem::size_of::<RkvmRegs>(); 
+                    rax: 0,
+                    rbx: 0,
+                    rcx: 0,
+                    rdx: 0,
+                    rsi: 0,
+                    rdi: 0,
+                    rsp: 0,
+                    rbp: 0,
+                    r8: 0,
+                    r9: 0,
+                    r10: 0,
+                    r11: 0,
+                    r12: 0,
+                    r13: 0,
+                    r14: 0,
+                    r15: 0,
+                    rip: 0,
+                    rflags: 0,
+                };
+
+                let len = core::mem::size_of::<RkvmRegs>();
                 unsafe {
                     let ptr = core::slice::from_raw_parts_mut(
                         (&mut uaddr_ as *mut RkvmRegs) as *mut u8,
@@ -363,18 +382,22 @@ impl IoctlHandler for RkvmState {
                     );
                     reader.read_raw(ptr.as_mut_ptr(), len)?;
                 }
-                pr_info!(" IOCTL_KVM_SET_REGS: rip={:x}, rax={:x} \n", uaddr_.rip, uaddr_.rax);
+                pr_info!(
+                    " IOCTL_KVM_SET_REGS: rip={:x}, rax={:x} \n",
+                    uaddr_.rip,
+                    uaddr_.rax
+                );
                 vcpu.set_regs(&uaddr_);
 
                 Ok(0)
-           }
-           IOCTL_KVM_SET_SREGS => {
+            }
+            IOCTL_KVM_SET_SREGS => {
                 pr_info!("Rust kvm: IOCTL_KVM_SET_SREGS \n");
                 let vcpu = unsafe {
                     match &VCPU {
                         Some(e) => e.clone(),
                         None => return Err(Error::ENOENT),
-                   }
+                    }
                 };
                 let mut uaddr_ = RkvmSregs::new();
                 let len = core::mem::size_of::<RkvmSregs>();
@@ -388,7 +411,7 @@ impl IoctlHandler for RkvmState {
 
                 vcpu.set_sregs(&uaddr_);
                 Ok(0)
-           } 
+            }
             _ => Err(Error::EINVAL),
         }
     }

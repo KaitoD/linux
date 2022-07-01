@@ -11,6 +11,7 @@ use kernel::{
 
 use crate::vmcs::*;
 use crate::x86reg::*;
+use crate::{rkvm_debug, DEBUG_ON};
 
 #[repr(u64)]
 #[derive(Debug)]
@@ -85,7 +86,6 @@ pub(crate) struct EptMasks {
 impl EptMasks {
     fn new() -> Result<Ref<Self>> {
         let ept_cap = read_msr(X86Msr::VMX_EPT_VPID_CAP);
-        
         let user_mask = VmxEptFlag::VMX_EPT_READABLE_MASK as u64;
         let mut a_mask = VmxEptFlag::VMX_EPT_ACCESS_BIT as u64;
         let mut d_mask = VmxEptFlag::VMX_EPT_DIRTY_BIT as u64;
@@ -110,7 +110,7 @@ impl EptMasks {
             ept_exec_mask: x_mask,
             ept_present_mask: present_mask,
             ad_disabled: ad_disabled,
-            has_exec_only: has_exec_only,     
+            has_exec_only: has_exec_only,
         })?;
 
         Ok(pte_flags)
@@ -136,21 +136,27 @@ impl RkvmMmu {
             Some(hpa) => hpa,
             None => return Err(Error::ENOMEM),
         };
-        pr_info!("RkvmMmu hpa(va) = {:x} \n", hpa);
+
+        rkvm_debug!("RkvmMmu hpa(va) = {:x} \n", hpa);
+
         let ptr = hpa as *mut c_void;
         unsafe {
             bindings::memset(ptr, 0, PAGE_SIZE as u64);
         }
         let hpa = unsafe { bindings::rkvm_phy_address(hpa) };
-        pr_info!("RkvmMmu hpa(phy) = {:x}--root_hpa \n", hpa);
+
+        rkvm_debug!("RkvmMmu hpa(phy) = {:x}--root_hpa \n", hpa);
 
         let flags = EptMasks::new();
         let flags = match flags {
             Ok(flags) => flags,
             Err(err) => return Err(err),
         };
-        pr_info!("ad_disabled = {}, ecex_only = {}", flags.ad_disabled, flags.has_exec_only);
-        
+        rkvm_debug!(
+            "ad_disabled = {}, ecex_only = {}",
+            flags.ad_disabled,
+            flags.has_exec_only
+        );
 
         let mut mmu = UniqueRef::try_new(Self {
             root_hpa: hpa, //physical addr
@@ -188,13 +194,16 @@ impl RkvmMmu {
     }
 
     pub(crate) fn init_mmu_root(&mut self) -> Result {
-        //TODO: pgd setting
-        pr_info!(" ### init_mmu_root \n");
+        rkvm_debug!(" init_mmu_root \n");
+
         let eptp = self.make_eptp();
         vmcs_write64(VmcsField::EPT_POINTER, eptp);
-        pr_info!("hpa= {:x}, eptp = {:x} \n", self.root_hpa, eptp);
-        unsafe { bindings::rkvm_invept(1, eptp, 0) };
 
+        rkvm_debug!("hpa= {:x}, eptp = {:x} \n", self.root_hpa, eptp);
+
+        if invept(InvEptType::Single, eptp).is_err() {
+            pr_info!(" invept:Single, eptp=0x{:x} failed \n", eptp);
+        }
         Ok(())
     }
     pub(crate) fn is_pte_present(&self, pte: u64) -> bool {

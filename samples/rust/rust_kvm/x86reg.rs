@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-//use kernel::bit;
 
 //control registers
 #[allow(dead_code)]
@@ -22,17 +21,15 @@ impl Cr4 {
     pub(crate) const CR4_ENABLE_VMX: usize = 13;
 }
 
-pub(crate) struct RFlags {
-    pub(crate) value: u64,
-}
-
+#[repr(u64)]
 #[allow(dead_code)]
-impl RFlags {
-    pub(crate) const FLAGS_IF: u64 = 9;
-    pub(crate) const FLAGS_ZF: u64 = 6;
-    pub(crate) const FLAGS_AF: u64 = 4;
-    pub(crate) const FLAGS_A1: u64 = 1;
-    pub(crate) const FLAGS_CF: u64 = 0;
+#[allow(non_camel_case_types)]
+pub(crate) enum RFlags {
+    FLAGS_IF = 1 << 9,
+    FLAGS_ZF = 1 << 6,
+    FLAGS_AF = 1 << 4,
+    FLAGS_A1 = 1 << 1,
+    FLAGS_CF = 1 << 0,
 }
 
 #[repr(u32)]
@@ -40,6 +37,7 @@ impl RFlags {
 #[derive(Clone, Copy, Debug)]
 #[allow(non_camel_case_types)]
 pub(crate) enum X86Msr {
+    VMX_BASIC = 0x00000480,
     FS_BASE = 0xc0000100, /* fs base address */
     GS_BASE = 0xc0000101, /* gs base address */
     KERNEL_GS_BASE = 0xc0000102,

@@ -120,6 +120,7 @@ impl EptMasks {
 pub(crate) struct RkvmMmu {
     pub(crate) root_hpa: u64,
     pub(crate) root_mmu_page: Ref<RkvmMmuPage>,
+    mmu_root_list: List<Ref<RkvmMmuPage>>,
     mmu_pages_list: List<Ref<RkvmMmuPage>>,
     pub(crate) spte_flags: Ref<EptMasks>,
 }
@@ -161,11 +162,12 @@ impl RkvmMmu {
         let mut mmu = UniqueRef::try_new(Self {
             root_hpa: hpa, //physical addr
             root_mmu_page: root.clone(),
+            mmu_root_list:  List::new(),
             mmu_pages_list: List::new(),
             spte_flags: flags.clone(),
         })?;
 
-        mmu.mmu_pages_list.push_back(root);
+        mmu.mmu_root_list.push_back(root);
         Ok(mmu)
     }
     pub(crate) fn alloc_mmu_page(&mut self, level: u64, gfn: u64) -> Result<Ref<RkvmMmuPage>> {
@@ -228,7 +230,7 @@ impl RkvmMmuPage {
             Ok(page) => page,
             Err(err) => return Err(err),
         };
-        let spt = unsafe { Some(bindings::rkvm_page_address(page.pages)) };
+        let spt = unsafe { Some(bindings::page_address(page.pages) as u64) };
 
         let mmu_page = Ref::try_new(RkvmMmuPage {
             gfn: gfn,

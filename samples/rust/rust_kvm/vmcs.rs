@@ -322,7 +322,7 @@ pub(crate) struct VmcsConfig {
 }
 
 fn vmcs_status() -> Result {
-    let rflags = unsafe { bindings::rkvm_rflags_read() };
+    let rflags = read_rflags();
     if rflags & (RFlags::FLAGS_ZF as u64 + RFlags::FLAGS_CF as u64) != 0 {
         return Err(Error::EINVAL);
     }
@@ -741,9 +741,9 @@ impl VmcsConfig {
         Ok(0)
     }
     pub(crate) fn set_host_constant_vmcs(&self) {
-        let mut cr0 = unsafe { bindings::native2_read_cr0() };
+        let mut cr0 = read_cr0();
         cr0 &= !(Cr0::CR0_TS as u64);
-        let cr3 = unsafe { bindings::native2_read_cr3() };
+        let cr3 = read_cr3();
         // let cr4 = unsafe { bindings::cr4_read_shadow() };
         vmcs_write64(VmcsField::HOST_CR0, cr0);
         vmcs_write64(VmcsField::HOST_CR3, cr3);
@@ -757,7 +757,7 @@ impl VmcsConfig {
         vmcs_write16(VmcsField::HOST_GS_SELECTOR, 0); /* 22.2.4 */
         vmcs_write16(VmcsField::HOST_TR_SELECTOR, 64);
         // let fs = read_msr(X86Msr::FS_BASE);
-        let fs = unsafe { bindings::rkvm_rdfsbase() };
+        let fs = read_fsbase();
         vmcs_write64(VmcsField::HOST_FS_BASE, fs);
         // let gs = read_msr(X86Msr::GS_BASE);
         let gs = unsafe { bindings::rkvm_rdgsbase() };

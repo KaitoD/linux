@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+use crate::{rkvm_debug, DEBUG_ON};
+use core::arch::asm;
 
 //control registers
 #[allow(dead_code)]
@@ -18,7 +20,7 @@ pub(crate) struct Cr4 {
 }
 
 impl Cr4 {
-    pub(crate) const CR4_ENABLE_VMX: usize = 13;
+    pub(crate) const CR4_ENABLE_VMX: usize = 1 << 13;
 }
 
 #[repr(u64)]
@@ -53,4 +55,73 @@ pub(crate) enum X86Msr {
     TRUE_PROCBASED_CTLS = 0x048e,
     TRUE_EXIT_CTLS = 0x048f,
     TRUE_ENTRY_CTLS = 0x490,
+}
+
+pub(crate) fn read_cr0() -> u64 {
+    let val: u64;
+    unsafe {
+        asm!("mov {0}, cr0",
+            out(reg) val
+        );
+    }
+    return val;
+}
+
+pub(crate) fn read_cr2() -> u64 {
+    let val: u64;
+    unsafe {
+        asm!("mov {0}, cr2",
+            out(reg) val
+        );
+    }
+    return val;
+}
+
+pub(crate) fn read_cr3() -> u64 {
+    let val: u64;
+    unsafe {
+        asm!("mov {0}, cr3",
+            out(reg) val
+        );
+    }
+    return val;
+}
+
+pub(crate) fn read_cr4() -> u64 {
+    let val: u64;
+    unsafe {
+        asm!("mov {0}, cr4",
+            out(reg) val
+        );
+    }
+    return val;
+}
+
+pub(crate) fn write_cr4(val: u64) {
+    unsafe {
+        asm!("mov  cr4, {0}",
+            in(reg) val
+        );
+    }
+}
+
+pub(crate) fn read_rflags() -> u64 {
+    let flags: u64;
+    unsafe {
+        asm!("pushf",
+            "pop {0}",
+            out(reg) flags,
+        );
+    }
+    flags
+}
+
+pub(crate) fn read_fsbase() -> u64 {
+    let fsbase: u64;
+    unsafe {
+        asm!("rdfsbase {0}",
+            out(reg) fsbase
+        );
+    }
+    return fsbase;
 }

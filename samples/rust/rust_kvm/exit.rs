@@ -3,6 +3,7 @@ use super::{VcpuWrapper, RkvmRun};
 use crate::mmu::*;
 use crate::vmcs::*;
 use crate::{rkvm_debug, DEBUG_ON};
+use core::arch::asm;
 use core::mem::MaybeUninit;
 use kernel::prelude::*;
 use kernel::{bindings, bit, sync::Ref, Error, Result, PAGE_SIZE};
@@ -577,4 +578,35 @@ pub(crate) fn handle_ept_violation(exit_info: &ExitInfo, vcpu: &VcpuWrapper) -> 
         pr_info!(" invept:Global failed\n");
     }
     Ok(1)
+}
+
+pub(crate) fn handle_cpuid(exit_info: &ExitInfo, vcpu: &VcpuWrapper) -> Result<u64> {
+    rkvm_debug!("Enter cpuid exit handler\n");
+
+    let mut vcpuinner = vcpu.vcpuinner.lock();
+    // TODO : Capability check
+    let irax = vcpuinner.guest_state.rax as u64;
+    let ircx = vcpuinner.guest_state.rcx as u64;
+    let (rax, rbx, rcx, rdx): (u64, u64, u64, u64);
+
+    unsafe {
+        asm!("cpuid\n\t", "mov rsi, rbx\n\t", inlateout("rax") irax => rax, lateout("rsi") rbx, inlateout("rcx") ircx => rcx, lateout("rdx") rdx);
+    }
+
+    rkvm_debug!(
+        "emulate cpuid : rax= {:x}, rbx = {:x}, rcx = {:x}, rdx= {:x}\n",
+        rax,
+        rbx,
+        rcx,
+        rdx
+    );
+
+    vcpuinner.guest_state.rax = rax;
+    vcpuinner.guest_state.rbx = rbx;
+    vcpuinner.guest_state.rcx = rcx;
+    vcpuinner.guest_state.rdx = rdx;
+
+    exit_info.next_rip();
+
+    Ok(0)
 }
